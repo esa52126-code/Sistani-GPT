@@ -1,0 +1,6 @@
+{
+  "name": "Tauzih AI",
+  "description": "Ayatollah Sistani's Tauzihul Masail AI Chatbot with rulings, Masla and Page references in Urdu, English, Roman Urdu, Farsi, and Arabic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

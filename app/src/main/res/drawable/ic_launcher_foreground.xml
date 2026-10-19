@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Crescent Moon at Top -->
+    <path
+        android:fillColor="#FFD700"
+        android:pathData="M54,23 C50,23 46.5,25.5 45,29 C48,27.5 51.5,28 53.5,30.5 C55.5,33 55.5,36.5 53.5,39 C58,37.5 61,33.5 61,29 C61,24.5 57.5,23 54,23 Z" />
+    <!-- 8-Pointed Star Above Book -->
+    <path
+        android:fillColor="#FFE082"
+        android:pathData="M54,34 L55.5,37 L58.5,38.5 L55.5,40 L54,43 L52.5,40 L49.5,38.5 L52.5,37 Z" />
+    <!-- Open Book Left Page Base -->
+    <path
+        android:fillColor="#F8F9FA"
+        android:pathData="M54,46 C47,43 36,44 26,48 L26,71 C36,67 47,66 54,69 Z" />
+    <!-- Open Book Right Page Base -->
+    <path
+        android:fillColor="#EDE8D0"
+        android:pathData="M54,46 C61,43 72,44 82,48 L82,71 C72,67 61,66 54,69 Z" />
+    <!-- Left Page Text Lines -->
+    <path
+        android:fillColor="#B45309"
+        android:pathData="M31,52 L49,50 L49,51.5 L31,53.5 Z M31,56.5 L49,54.5 L49,56 L31,58 Z M31,61 L49,59 L49,60.5 L31,62.5 Z M31,65.5 L44,64 L44,65.5 L31,67 Z" />
+    <!-- Right Page Text Lines -->
+    <path
+        android:fillColor="#B45309"
+        android:pathData="M59,50 L77,52 L77,53.5 L59,51.5 Z M59,54.5 L77,56.5 L77,58 L59,56 Z M59,59 L77,61 L77,62.5 L59,60.5 Z M64,64 L77,65.5 L77,67 L64,65.5 Z" />
+    <!-- Rehl Bookstand Base -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M54,69 L38,83 L42,85 L54,75 L66,85 L70,83 Z M46,79 L54,72 L62,79 L54,85 Z" />
+</vector>
