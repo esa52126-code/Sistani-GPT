@@ -1,0 +1,26 @@
+{
+  "name": "mobile-shop-manager-pro",
+  "productName": "Mobile Shop Manager Pro",
+  "version": "1.0.0",
+  "description": "Offline-first inventory, sales, credit and reporting software for mobile phone retailers.",
+  "main": "src/main/main.js",
+  "author": "Mobile Shop Manager Pro",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --no-warnings tests/run-all.js",
+    "icons": "node scripts/make-icons.js",
+    "docs": "node scripts/build-docs.js",
+    "dist:win": "electron-builder --win nsis portable --x64",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux AppImage",
+    "package:gumroad": "node scripts/package-delivery.js"
+  },
+  "devDependencies": {
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0",
+    "marked": "^18.2.0",
+    "resedit": "^3.1.0"
+  }
+}
