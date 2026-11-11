@@ -23,7 +23,7 @@ const Docs = (() => {
   .doc.land{width:297mm;min-height:209mm}.doc.rep td,.doc.rep th{padding:5px 7px;font-size:11px}
   .doc.th{width:80mm;min-height:0;padding:4mm 4mm 6mm;font-size:11px;font-family:"Segoe UI",Arial,sans-serif}
   .doc.th h1{font-size:15px;text-align:center;margin:4px 0 0}.doc.th .c{text-align:center}.doc.th p{margin:1px 0}.doc.th img{max-width:34mm;max-height:20mm;display:block;margin:0 auto}
-  .doc.th hr{border:0;border-top:1px dashed #000;margin:6px 0}.doc.th table td{border:0;padding:2px 0;font-size:11px}.doc.th .g td{font-weight:800;font-size:13px}
+  .doc.th hr{border:0;border-top:1px dashed #000;margin:6px 0}.doc.th table td{border:0;padding:2px 0;font-size:11px}.doc.th td small{display:inline;font-size:10px}.doc.th .g td{font-weight:800;font-size:13px}
   [dir=rtl] .doc .ttl{text-align:start}`;
   const shopLines = () => { const s = S(); return [s.shop_address, [s.shop_phone, s.shop_email].filter(Boolean).join(' · '), s.shop_website, s.tax_id ? `${s.tax_label || t('Tax')} ${t('No.')}: ${s.tax_id}` : ''].filter(Boolean); };
   const header = (title, lines) => { const s = S(); return `<div class="hd"><div class="shop">${s.invoice_show_logo && s.shop_logo ? `<img src="${esc(s.shop_logo)}" alt="">` : ''}<div><h1>${esc(s.shop_name)}</h1>${s.shop_tagline ? `<p>${esc(s.shop_tagline)}</p>` : ''}${shopLines().map(l => `<p>${esc(l)}</p>`).join('')}</div></div>
@@ -112,8 +112,8 @@ const Docs = (() => {
     const doPrint = async () => { try { await api('print:html', payload()); } catch (e) { fail(e); } };
     const doPdf = async () => { try { const f = await api('print:pdf', payload()); if (f) toast(t('Saved to {file}', { file: f })); } catch (e) { fail(e); } };
     let seg = null;
-    if (switcher) { seg = h('div', { class: 'seg grow' }, switcher.map((o, i) => h('button', { class: (o.thermal === thermal ? 'active' : ''), onclick: e => { cur = { body: o.body, thermal: o.thermal }; [...seg.children].forEach(b => b.classList.remove('active')); e.target.classList.add('active'); paint(); } }, o.label))); }
-    const m = modal({ title, size: 'lg', body: host, footer: [seg, ...extra, btn(t('Save as PDF'), 'pdf', '', doPdf), btn(t('Print'), 'print', 'primary', doPrint)] });
+    if (switcher) { seg = h('div', { class: 'seg' }, switcher.map((o, i) => h('button', { class: (o.thermal === thermal ? 'active' : ''), onclick: e => { cur = { body: o.body, thermal: o.thermal }; [...seg.children].forEach(b => b.classList.remove('active')); e.target.classList.add('active'); paint(); } }, o.label))); }
+    const m = modal({ title, size: 'lg', body: host, footer: [h('div', { class: 'grow' }, seg), ...extra, btn(t('Save as PDF'), 'pdf', '', doPdf), btn(t('Print'), 'print', 'primary', doPrint)] });
     return m;
   }
   async function showInvoice(saleId) {

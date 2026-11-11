@@ -2,8 +2,14 @@
 /* Core UI toolkit: IPC wrapper, i18n, DOM helper, icons, modal/form/table components. */
 const App = { settings: {}, info: {}, license: {}, locale: {}, pages: {}, current: null, hasDemo: false };
 
+// DOM insertion helpers accept null/false/arrays so templates can use conditionals freely.
+for (const m of ['replaceChildren', 'append']) {
+  const orig = Element.prototype[m];
+  Element.prototype[m] = function (...nodes) { return orig.apply(this, nodes.flat(Infinity).filter(n => n != null && n !== false)); };
+}
+
 async function api(channel, payload) {
-  const r = await window.api.invoke(channel, payload);
+  const r = await window.bridge.invoke(channel, payload);
   if (r && r.ok) return r.data;
   const e = new Error((r && r.error) || 'Request failed'); e.code = r && r.code; throw e;
 }

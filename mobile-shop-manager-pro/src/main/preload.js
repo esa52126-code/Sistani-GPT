@@ -1,7 +1,7 @@
 'use strict';
 /* The only bridge between the UI and the system. The renderer has no Node.js access. */
 const { contextBridge, ipcRenderer } = require('electron');
-contextBridge.exposeInMainWorld('api', {
+contextBridge.exposeInMainWorld('bridge', {
   invoke: (channel, payload) => {
     if (typeof channel !== 'string' || !/^[a-z]+:[A-Za-z]+$/.test(channel)) return Promise.reject(new Error('Invalid channel'));
     return ipcRenderer.invoke('api', channel, payload);

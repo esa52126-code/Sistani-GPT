@@ -12,15 +12,91 @@
     "test": "node --no-warnings tests/run-all.js",
     "icons": "node scripts/make-icons.js",
     "docs": "node scripts/build-docs.js",
-    "dist:win": "electron-builder --win nsis portable --x64",
+    "dist:win": "electron-builder --win --x64",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux AppImage",
-    "package:gumroad": "node scripts/package-delivery.js"
+    "package:gumroad": "node scripts/package-delivery.js",
+    "strings": "node --no-warnings scripts/extract-strings.js",
+    "e2e": "node scripts/e2e.js"
   },
   "devDependencies": {
     "electron": "^45.3.0",
     "electron-builder": "^26.18.0",
     "marked": "^18.2.0",
     "resedit": "^3.1.0"
+  },
+  "build": {
+    "appId": "com.mobileshopmanagerpro.app",
+    "productName": "Mobile Shop Manager Pro",
+    "copyright": "Copyright © 2026 Mobile Shop Manager Pro",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "LICENSE.txt",
+      "!src/renderer/locales/README*"
+    ],
+    "asar": true,
+    "electronLanguages": [
+      "en-US",
+      "en-GB",
+      "ar",
+      "ur",
+      "es",
+      "fr",
+      "de",
+      "hi"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Mobile Shop Manager Pro",
+      "artifactName": "MobileShopManagerPro-Setup-${version}.${ext}",
+      "uninstallDisplayName": "Mobile Shop Manager Pro",
+      "deleteAppDataOnUninstall": false,
+      "license": "build/EULA.txt",
+      "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "MobileShopManagerPro-Portable-${version}.${ext}"
+    },
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office",
+      "icon": "build/icon.png"
+    },
+    "publish": null
   }
 }

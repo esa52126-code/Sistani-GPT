@@ -1,0 +1,37 @@
+name: Build Windows release (Mobile Shop Manager Pro)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['msm-v*']
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: mobile-shop-manager-pro
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Test tooling (not shipped with the app)
+        run: npm install --no-save playwright
+      - name: Business-logic and licensing tests
+        run: npm test
+      - name: End-to-end test in the real app
+        run: npm run e2e -- e2e-screenshots
+      - name: Build installer and portable version
+        run: npm run dist:win
+      - name: Build PDFs and Gumroad package
+        run: |
+          npx playwright install chromium
+          npm run docs
+          npm run package:gumroad
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MobileShopManagerPro-Gumroad-package
+          path: mobile-shop-manager-pro/delivery/*.zip
+          if-no-files-found: error

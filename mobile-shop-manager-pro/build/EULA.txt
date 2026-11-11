@@ -1,0 +1,32 @@
+MOBILE SHOP MANAGER PRO - END USER LICENSE AGREEMENT (TEMPLATE)
+
+IMPORTANT: This is a starting template for the seller. Have it reviewed for your
+country before selling. Replace [SELLER NAME] and [SUPPORT EMAIL].
+
+1. LICENSE. [SELLER NAME] grants you a non-exclusive, non-transferable license to
+   install and use Mobile Shop Manager Pro for your own business, on the number of
+   computers allowed by your purchase.
+
+2. RESTRICTIONS. You may not resell, rent, sublicense or redistribute the software
+   or your license key, or remove copyright notices.
+
+3. YOUR DATA. All business data you enter is stored locally on your computer and
+   belongs to you. The software does not upload it. You are responsible for keeping
+   backups. The only network request made by the software is license verification.
+
+4. TAX AND ACCOUNTING. The software calculates tax and profit from the settings and
+   figures you enter. It is not tax, legal or accounting advice and does not
+   guarantee compliance with the laws of any country.
+
+5. NO WARRANTY. The software is provided "as is", without warranty of any kind, to
+   the maximum extent permitted by law.
+
+6. LIMITATION OF LIABILITY. To the maximum extent permitted by law, the seller is
+   not liable for indirect or consequential loss, including loss of data or profit.
+   Total liability is limited to the amount you paid for the license.
+
+7. TERMINATION. This license ends if you breach it or if your purchase is refunded
+   or charged back. Your locally stored data remains accessible for viewing, export
+   and backup.
+
+8. SUPPORT. [SUPPORT EMAIL]

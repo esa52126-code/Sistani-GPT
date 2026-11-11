@@ -47,7 +47,7 @@ const Charts = (() => {
   /** Labelled horizontal bars for a short ranked list (single hue, direct value labels). */
   function hbars(items, format = money) {
     const max = Math.max(1e-9, ...items.map(i => Math.abs(i.value)));
-    return h('div', null, items.length ? items.map(i => h('div', { class: 'hbar' }, h('span', null, i.label), h('div', { class: 'track' }, h('i', { style: { width: Math.max(2, Math.abs(i.value) / max * 100) + '%', background: i.color || COLORS.blue } })), h('b', { class: 'num' }, format(i.value)))) : h('div', { class: 'muted small' }, t('No data for this period.')));
+    return h('div', null, items.length ? items.map(i => h('div', { class: 'hbar' }, h('span', null, i.label), h('div', { class: 'track' }, h('i', { style: { width: (i.value ? Math.max(2, Math.abs(i.value) / max * 100) : 0) + '%', background: i.color || COLORS.blue } })), h('b', { class: 'num' }, format(i.value)))) : h('div', { class: 'muted small' }, t('No data for this period.')));
   }
   return { bars, legend, hbars, COLORS };
 })();

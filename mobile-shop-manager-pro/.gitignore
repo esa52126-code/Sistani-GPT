@@ -1,5 +1,6 @@
 node_modules/
 dist/
+e2e-screenshots/
 delivery/
 *.log
 .DS_Store

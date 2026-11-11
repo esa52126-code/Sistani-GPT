@@ -18,6 +18,18 @@ if (portableDir || (isDev && process.env.MSM_DATA_DIR)) app.setPath('userData', 
 
 let mainWindow = null, splash = null, db = null, license = null;
 
+/** Small rolling log (logs/main.log in the app's settings folder) to help with support requests. No business data is written. */
+function log(...parts) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs'), file = path.join(dir, 'main.log');
+    fs.mkdirSync(dir, { recursive: true });
+    if (fs.existsSync(file) && fs.statSync(file).size > 512 * 1024) fs.renameSync(file, file + '.old');
+    fs.appendFileSync(file, `${new Date().toISOString()} ${parts.map(x => (x && x.stack) || String(x)).join(' ')}\n`);
+  } catch (_) { /* logging must never break the app */ }
+}
+process.on('uncaughtException', e => { log('uncaughtException', e); console.error(e); });
+process.on('unhandledRejection', e => { log('unhandledRejection', e); });
+
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 else {
   app.on('second-instance', () => { if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.focus(); } });
@@ -25,7 +37,7 @@ else {
 }
 
 function fatal(e) {
-  console.error(e);
+  log('fatal', e); console.error(e);
   dialog.showErrorBox('Mobile Shop Manager Pro', 'The application could not start.\n\n' + (e && e.message ? e.message : e) + '\n\nYour data has not been changed. See the Troubleshooting guide for help.');
   app.exit(1);
 }
@@ -78,6 +90,7 @@ async function start() {
   session.defaultSession.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !/^(file|devtools|data|blob|chrome-extension):/.test(details.url) }));
   createSplash();
 
+  log(`start v${app.getVersion()} ${process.platform} electron ${process.versions.electron} data=${dataDir}`);
   fs.mkdirSync(dataDir, { recursive: true });
   db = new Database(path.join(dataDir, 'shop.db'));
   const defaultBackupDir = portableDir ? path.join(dataDir, 'Backups') : path.join(app.getPath('documents'), 'Mobile Shop Manager Pro Backups');
@@ -100,6 +113,7 @@ async function start() {
   registerIpc({ db, license, dataDir, defaultBackupDir, portable: !!portableDir, getMainWindow: () => mainWindow });
   buildMenu();
   createMainWindow();
+  log(`ready schema=${db.schemaVersion} licence=${license.state().mode}`);
 
   Backup.autoIfDue(db, defaultBackupDir);
   const recheck = () => license.verify().then(s => mainWindow && mainWindow.webContents.send('event:license', s)).catch(() => {});

@@ -185,3 +185,4 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 [dir=rtl] .tbl td.num,[dir=rtl] .tbl th.num{direction:ltr}
 [dir=rtl] .num{direction:ltr;unicode-bidi:isolate}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+[dir=rtl] .stat .sub,[dir=rtl] .page-head p,[dir=rtl] .card>.hd p{unicode-bidi:plaintext;text-align:start}
