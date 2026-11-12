@@ -18,6 +18,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
 const { AppError } = require('../db');
+const OfflineKey = require('./offline-key');
 
 const ENDPOINT = 'https://api.gumroad.com/v2/licenses/verify';
 const DAY = 86400000;
@@ -38,10 +39,15 @@ class License {
       uses INTEGER DEFAULT 0, is_test INTEGER DEFAULT 0,
       first_run_at INTEGER NOT NULL, activated_at INTEGER, last_verified_at INTEGER, last_attempt_at INTEGER, last_error TEXT DEFAULT '', last_seen_at INTEGER
     )`);
+    // Added in 1.1: which kind of key is stored ('gumroad' is checked online, 'offline' is a signed universal key).
+    if (!this.db.prepare('PRAGMA table_info(licenses)').all().some(c => c.name === 'key_type')) this.db.exec(`ALTER TABLE licenses ADD COLUMN key_type TEXT DEFAULT 'gumroad'`);
     if (!this.db.prepare('SELECT id FROM licenses WHERE id = 1').get())
       this.db.prepare('INSERT INTO licenses(id, first_run_at, last_seen_at) VALUES(1, ?, ?)').run(this.now(), this.now());
   }
-  get configured() { return !!(this.config.productId || this.config.productPermalink); }
+  get gumroadEnabled() { return !!(this.config.productId || this.config.productPermalink); }
+  get offlineEnabled() { return !!(this.config.offlinePublicKey && this.config.offlinePublicKey.x); }
+  get configured() { return this.gumroadEnabled || this.offlineEnabled; }
+  deviceCode() { if (!this._device) this._device = (this.deviceCodeFn || OfflineKey.deviceCode)(); return this._device; }
   row() { return { ...this.db.prepare('SELECT * FROM licenses WHERE id = 1').get() }; }
   set(patch) {
     const keys = Object.keys(patch);
@@ -52,12 +58,19 @@ class License {
   /** Safe summary for the renderer (the key is masked). */
   state() {
     const r = this.row(), now = this.now(), c = this.config;
-    const base = { configured: this.configured, purchaseUrl: c.purchaseUrl, supportEmail: c.supportEmail, graceDays: c.graceDays, trialDays: c.trialDays,
-      email: r.email, key_masked: r.license_key ? r.license_key.replace(/.(?=.{4})/g, ch => (ch === '-' ? '-' : '•')) : '',
+    const base = { configured: this.configured, gumroad: this.gumroadEnabled, offline: this.offlineEnabled, device_code: this.offlineEnabled ? this.deviceCode() : '', key_type: r.key_type || 'gumroad', purchaseUrl: c.purchaseUrl, supportEmail: c.supportEmail, graceDays: c.graceDays, trialDays: c.trialDays,
+      email: r.email, key_masked: !r.license_key ? '' : r.license_key.length > 60 ? r.license_key.slice(0, 5) + '••••••-…-' + r.license_key.slice(-6) : r.license_key.replace(/.(?=.{4})/g, ch => (ch === '-' ? '-' : '•')),
       activated_at: r.activated_at, last_verified_at: r.last_verified_at, last_error: r.last_error, is_test: !!r.is_test };
     if (!this.configured) return { ...base, mode: 'unconfigured', restricted: false, message: 'Licensing is not configured in this build.' };
     // A clock moved far backwards cannot be used to stretch the trial or grace period.
     const clock = Math.max(now, r.last_seen_at || 0);
+    if (r.status === 'active' && r.key_type === 'offline') {
+      // Universal keys are verified on this computer; they never need the internet again.
+      const v = this.offlineEnabled ? OfflineKey.verify(this.config.offlinePublicKey, r.license_key) : { ok: false };
+      if (v.ok && (!v.device || v.device === this.deviceCode())) return { ...base, mode: 'active', restricted: false, grace_days_left: null, message: 'Licensed' };
+      return { ...base, mode: 'revoked', restricted: true, reason: 'the licence key does not belong to this computer',
+        message: 'This licence key is not valid on this computer. Your data is safe and can still be viewed, printed, exported and backed up.' };
+    }
     if (r.status === 'active') {
       const since = (clock - (r.last_verified_at || r.activated_at || 0)) / DAY;
       const left = Math.ceil(c.graceDays - since);
@@ -105,6 +118,8 @@ class License {
   async activate(rawKey) {
     if (!this.configured) throw new AppError('Licensing is not configured in this build.', 'LICENSE');
     const key = String(rawKey || '').trim();
+    if (OfflineKey.looksLikeOfflineKey(key)) return this.activateOffline(key);
+    if (!this.gumroadEnabled) throw new AppError('This licence key is not valid for Mobile Shop Manager Pro. Please check it and try again.', 'LICENSE');
     if (!/^[A-Za-z0-9-]{8,80}$/.test(key)) throw new AppError('Please enter the licence key exactly as shown on your Gumroad receipt.', 'LICENSE');
     const cur = this.row();
     const same = cur.license_key === key && cur.status === 'active';
@@ -119,13 +134,25 @@ class License {
     const now = this.now(), p = check.purchase;
     this.set({ license_key: key, product_id: this.config.productId || this.config.productPermalink, status: 'active', revoke_reason: '', email: String(p.email || ''),
       purchase_id: String(p.id || p.sale_id || ''), purchased_at: String(p.sale_timestamp || p.created_at || ''), uses, is_test: p.test ? 1 : 0,
-      activated_at: same ? cur.activated_at : now, last_verified_at: now, last_attempt_at: now, last_error: '', last_seen_at: now });
+      activated_at: same ? cur.activated_at : now, last_verified_at: now, last_attempt_at: now, last_error: '', last_seen_at: now, key_type: 'gumroad' });
+    return this.state();
+  }
+  /** Universal key: checked against the built-in public key, no internet involved. */
+  activateOffline(key) {
+    if (!this.offlineEnabled) throw new AppError('This licence key is not valid for Mobile Shop Manager Pro. Please check it and try again.', 'LICENSE');
+    if (key.length > 400) throw new AppError('Please paste the complete licence key exactly as you received it.', 'LICENSE');
+    const v = OfflineKey.verify(this.config.offlinePublicKey, key);
+    if (!v.ok) throw new AppError(v.reason === 'format' ? 'The licence key is incomplete. Please paste the complete key exactly as you received it.' : 'This licence key is not valid for Mobile Shop Manager Pro. Please check it and try again.', 'LICENSE');
+    if (v.device && v.device !== this.deviceCode()) throw new AppError(`This licence key was issued for another computer (device code ${v.device}). This computer's device code is ${this.deviceCode()}. Please send it to the seller to receive a key for this computer.`, 'LICENSE');
+    const now = this.now();
+    this.set({ license_key: v.canonical, product_id: 'offline', status: 'active', revoke_reason: '', email: '', purchase_id: String(v.serial), purchased_at: new Date(v.issued).toISOString().slice(0, 10), uses: 0, is_test: 0,
+      activated_at: now, last_verified_at: now, last_attempt_at: now, last_error: '', last_seen_at: now, key_type: 'offline' });
     return this.state();
   }
   /** Re-checks a stored key. Network trouble never changes the licence status. */
   async verify({ force = false } = {}) {
     const r = this.row();
-    if (!this.configured || !r.license_key || r.status === 'none') return this.state();
+    if (!this.gumroadEnabled || !r.license_key || r.status === 'none' || r.key_type === 'offline') return this.state();
     const now = this.now();
     if (!force && r.status === 'active' && r.last_verified_at && now - r.last_verified_at < this.config.recheckDays * DAY) return this.state();
     const res = await this.call(r.license_key, false);
@@ -138,7 +165,7 @@ class License {
   }
   /** Removes the key from this computer only. */
   deactivate() {
-    this.set({ license_key: '', status: 'none', revoke_reason: '', email: '', purchase_id: '', purchased_at: '', uses: 0, activated_at: null, last_verified_at: null, last_error: '' });
+    this.set({ license_key: '', status: 'none', revoke_reason: '', email: '', purchase_id: '', purchased_at: '', uses: 0, activated_at: null, last_verified_at: null, last_error: '', key_type: 'gumroad' });
     return this.state();
   }
 }

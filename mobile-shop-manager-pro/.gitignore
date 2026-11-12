@@ -4,3 +4,4 @@ e2e-screenshots/
 delivery/
 *.log
 .DS_Store
+seller-private/

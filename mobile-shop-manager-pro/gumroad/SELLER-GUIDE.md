@@ -1,4 +1,36 @@
-# Seller Guide — getting Mobile Shop Manager Pro onto Gumroad
+# Seller Guide — selling Mobile Shop Manager Pro
+
+The app accepts **two kinds of licence key**, and both can be switched on at the same time:
+
+| | Universal keys (`MSM1-…`) | Gumroad keys |
+|---|---|---|
+| Who creates them | You, with the Licence Key Generator | Gumroad, automatically per sale |
+| Where you can sell | Anywhere: any store, your website, WhatsApp, in person | Gumroad only |
+| Internet needed by the customer | Never | Once, to activate |
+| Can a refunded key be switched off? | No | Yes |
+| Can be locked to one computer | Yes (device code) | No |
+
+## Universal keys — sell on any platform
+
+Your private seller files (never share or upload these):
+
+- `License-Key-Generator.html` — open it in Chrome, Edge or Firefox. It works without internet.
+- `Licence-Keys-500.txt` — 500 ready-made keys, one per line.
+- `private-key.json` — your signing key. **Back it up.** If it is lost, new keys can only be made after creating a new signing key and rebuilding the app, and keys from the old one stop being accepted by the new build.
+
+How to use them:
+
+- **Stores that accept a list of keys** (one key handed out per sale): upload `Licence-Keys-500.txt`, or create a bigger list with the generator.
+- **Stores without key support, or direct sales**: after each sale, copy the next unused key from the list and send it to the customer. Mark it as used.
+- **Stronger protection**: ask the customer for the **device code** shown in the app under Settings → Licence, type it into the generator, and send the key it creates. That key works on that computer only.
+
+Honest limits of universal keys: because they are checked without any server, a key that is *not* device-locked will work on any number of computers if a customer shares it, and a key cannot be cancelled after a refund. Use device-locked keys when that matters.
+
+To create your own signing key and generator from the source code: `npm run keygen:setup` (then rebuild the app).
+
+---
+
+# Gumroad keys
 
 ## 1. Create the product and switch on licence keys
 

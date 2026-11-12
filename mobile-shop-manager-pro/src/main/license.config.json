@@ -7,5 +7,11 @@
   "trialDays": 14,
   "graceDays": 30,
   "recheckDays": 7,
-  "maxActivations": 0
+  "maxActivations": 0,
+  "offlinePublicKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "cQS9MY7I8hVpSyBCwY3gAd80M9VaI5geCY8xy-O_d0M",
+    "y": "OC0DkI0Xu9evHtPoGtJ7G6K3ps-yIqK-mOSvglfoHVU"
+  }
 }

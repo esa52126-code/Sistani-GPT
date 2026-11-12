@@ -1,6 +1,12 @@
 # Changelog
 
-## Version {{version}} — first release
+## Version 1.1.0
+
+- Universal licence keys (`MSM1-…`) that activate without internet and can be sold on any platform
+- Optional device-locked keys, with the device code shown in Settings → Licence
+- Gumroad keys continue to work
+
+## Version 1.0.0 — first release
 
 - Mobile inventory with automatic Stock IDs and IMEI uniqueness across new and used stock
 - Accessories inventory with purchases, stock adjustments, weighted-average cost and low-stock alerts

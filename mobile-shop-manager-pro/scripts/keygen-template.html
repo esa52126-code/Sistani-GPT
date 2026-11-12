@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Licence Key Generator — Mobile Shop Manager Pro</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:"Segoe UI",Roboto,system-ui,sans-serif;background:#f4f6fb;color:#0f172a;font-size:16px;line-height:1.5}
+main{max-width:720px;margin:0 auto;padding:20px 16px 60px}h1{font-size:22px;margin:6px 0 2px}p.sub{margin:0 0 16px;color:#64748b}
+.card{background:#fff;border:1px solid #e5e9f2;border-radius:14px;padding:16px;margin-bottom:14px}h2{font-size:17px;margin:0 0 4px}.hint{color:#64748b;font-size:14px;margin:0 0 12px}
+label{display:block;font-weight:600;font-size:14px;margin:10px 0 4px}input,textarea{width:100%;font:inherit;padding:11px 12px;border:1px solid #cbd5e1;border-radius:10px;background:#fff}
+textarea{min-height:150px;font-family:Consolas,monospace;font-size:13px;word-break:break-all}
+button{font:inherit;font-weight:700;border:0;border-radius:10px;padding:12px 16px;background:#2563eb;color:#fff;cursor:pointer;margin:12px 8px 0 0}button.alt{background:#fff;color:#0f172a;border:1px solid #cbd5e1}button.green{background:#16a34a}
+.warn{background:#fff7e6;border:1px solid #fde3b0;color:#92400e;border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:14px}.err{color:#b91c1c;font-weight:600;margin-top:10px}.ok{color:#15803d;font-weight:600;margin-top:10px}
+</style></head><body><main>
+<h1>Licence Key Generator</h1><p class="sub">Mobile Shop Manager Pro — for the seller only</p>
+<div class="warn"><b>Keep this file private.</b> Anyone who has it can create unlimited licence keys. Never upload it, never send it to a customer, and keep a backup copy somewhere safe. It works without internet.</div>
+
+<div class="card"><h2>One key for one customer</h2><p class="hint">Leave "Device code" empty for a key that works on any computer. Fill it in (the customer finds it in the app under Settings → Licence) to lock the key to that one computer.</p>
+<label for="dev">Device code (optional), e.g. A1B2-C3D4</label><input id="dev" autocomplete="off" placeholder="Leave empty for any computer">
+<button id="one">Create key</button><div id="oneMsg"></div>
+<label for="oneOut">Licence key</label><textarea id="oneOut" readonly style="min-height:110px"></textarea>
+<button class="alt" data-copy="oneOut">Copy key</button></div>
+
+<div class="card"><h2>Many keys at once</h2><p class="hint">For platforms where you upload a list of keys (one key per line). These keys work on any computer.</p>
+<label for="n">How many keys?</label><input id="n" type="number" min="1" max="5000" value="100">
+<button id="many">Create keys</button><div id="manyMsg"></div>
+<label for="manyOut">Keys (one per line)</label><textarea id="manyOut" readonly></textarea>
+<button class="alt" data-copy="manyOut">Copy all</button><button class="green" id="save">Save as text file</button></div>
+
+<div class="card"><h2>Check a key</h2><p class="hint">Paste a key to see whether it is genuine and which computer it is for.</p>
+<textarea id="chk" style="min-height:90px" placeholder="Paste a licence key"></textarea><button id="check" class="alt">Check key</button><div id="chkMsg"></div></div>
+</main>
+<script>
+const PRIVATE_JWK = /*PRIVATE_JWK*/null, PUBLIC_JWK = /*PUBLIC_JWK*/null;
+const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567', EPOCH = Date.UTC(2026, 0, 1), $ = id => document.getElementById(id);
+function b32(bytes) { let bits = 0, val = 0, out = ''; for (const b of bytes) { val = (val << 8) | b; bits += 8; while (bits >= 5) { out += ALPHA[(val >>> (bits - 5)) & 31]; bits -= 5; } } if (bits) out += ALPHA[(val << (5 - bits)) & 31]; return out; }
+function unb32(str) { let bits = 0, val = 0; const out = []; for (const ch of str) { const i = ALPHA.indexOf(ch); if (i < 0) return null; val = (val << 5) | i; bits += 5; if (bits >= 8) { out.push((val >>> (bits - 8)) & 255); bits -= 8; } } return new Uint8Array(out); }
+let priv, pub;
+async function keys() {
+  if (!crypto.subtle) throw new Error('This browser cannot create keys from this file. Open the file in Chrome, Edge or Firefox on a computer.');
+  priv = priv || await crypto.subtle.importKey('jwk', PRIVATE_JWK, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  pub = pub || await crypto.subtle.importKey('jwk', PUBLIC_JWK, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+}
+async function make(device) {
+  await keys();
+  const p = new Uint8Array(11), dv = new DataView(p.buffer); p[0] = 1; crypto.getRandomValues(p.subarray(1, 5));
+  dv.setUint16(5, Math.max(0, Math.min(65535, Math.floor((Date.now() - EPOCH) / 86400000))));
+  if (device) for (let i = 0; i < 4; i++) p[7 + i] = parseInt(device.substr(i * 2, 2), 16);
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, priv, p));
+  const all = new Uint8Array(75); all.set(p); all.set(sig, 11);
+  return 'MSM1-' + b32(all).match(/.{1,6}/g).join('-');
+}
+const say = (id, text, ok) => { $(id).className = ok ? 'ok' : 'err'; $(id).textContent = text; };
+$('one').onclick = async () => { try { const raw = $('dev').value.replace(/[^0-9a-fA-F]/g, '').toUpperCase(); if ($('dev').value.trim() && raw.length !== 8) return say('oneMsg', 'A device code has 8 characters, like A1B2-C3D4.');
+  $('oneOut').value = await make(raw); say('oneMsg', raw ? 'Key created for device ' + raw.slice(0, 4) + '-' + raw.slice(4) + '.' : 'Key created. It works on any computer.', true); } catch (e) { say('oneMsg', e.message); } };
+$('many').onclick = async () => { try { const n = Math.max(1, Math.min(5000, parseInt($('n').value, 10) || 0)); const out = []; for (let i = 0; i < n; i++) out.push(await make('')); $('manyOut').value = out.join('\n'); say('manyMsg', n + ' keys created.', true); } catch (e) { say('manyMsg', e.message); } };
+$('save').onclick = () => { if (!$('manyOut').value) return; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('manyOut').value.replace(/\n/g, '\r\n') + '\r\n'], { type: 'text/plain' })); a.download = 'licence-keys.txt'; a.click(); };
+document.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => { const t = $(b.dataset.copy); if (!t.value) return; try { await navigator.clipboard.writeText(t.value); } catch (_) { t.select(); document.execCommand('copy'); } b.textContent = 'Copied'; setTimeout(() => b.textContent = b.dataset.copy === 'oneOut' ? 'Copy key' : 'Copy all', 1500); });
+$('check').onclick = async () => { try { await keys(); const clean = $('chk').value.replace(/[^A-Za-z0-9]/g, '').toUpperCase(); if (!clean.startsWith('MSM1')) return say('chkMsg', 'Not a Mobile Shop Manager Pro key.');
+  const raw = unb32(clean.slice(4)); if (!raw || raw.length < 75) return say('chkMsg', 'The key is incomplete.');
+  const good = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pub, raw.slice(11, 75), raw.slice(0, 11)); if (!good) return say('chkMsg', 'This key is NOT genuine.');
+  const dv = new DataView(raw.buffer), dev = [...raw.slice(7, 11)].map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase(), d = new Date(EPOCH + dv.getUint16(5) * 86400000).toISOString().slice(0, 10);
+  say('chkMsg', 'Genuine key. Created ' + d + '. ' + (dev === '00000000' ? 'Works on any computer.' : 'Locked to device ' + dev.slice(0, 4) + '-' + dev.slice(4) + '.'), true); } catch (e) { say('chkMsg', e.message); } };
+</script></body></html>

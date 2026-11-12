@@ -11,7 +11,7 @@
 | Memory | 4 GB RAM | 8 GB RAM |
 | Disk space | 500 MB free | 1 GB free plus space for backups |
 | Display | 1280 × 720 | 1920 × 1080 |
-| Internet | Only once, to activate the licence | — |
+| Internet | Not needed for everyday work | — |
 | Printer (optional) | Any Windows printer: A4/Letter or 80 mm thermal receipt printer | |
 
 ## Which file should I use?

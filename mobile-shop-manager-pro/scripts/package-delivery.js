@@ -15,7 +15,7 @@ for (const f of fs.readdirSync(docs).filter(f => f.endsWith('.pdf'))) fs.copyFil
 fs.copyFileSync(path.join(root, 'LICENSE.txt'), path.join(dir, 'LICENSE.txt'));
 const crlf = s => s.replace(/\r?\n/g, '\r\n');
 fs.writeFileSync(path.join(dir, 'VERSION.txt'), crlf(`Mobile Shop Manager Pro\nVersion ${v}\nBuilt ${new Date().toISOString().slice(0, 10)}\nPlatform: Windows 10 / 11 (64-bit)\n`));
-fs.writeFileSync(path.join(dir, 'CHANGELOG.txt'), crlf(fs.readFileSync(path.join(root, 'docs', '06-Changelog.md'), 'utf8').replace(/\{\{version\}\}/g, v).replace(/^#+ /gm, '')));
+fs.writeFileSync(path.join(dir, 'CHANGELOG.txt'), crlf(fs.readFileSync(path.join(root, 'docs', '06-Changelog.md'), 'utf8').replace(/^#+ /gm, '')));
 fs.writeFileSync(path.join(dir, 'README - START HERE.txt'), crlf(`MOBILE SHOP MANAGER PRO  v${v}
 =====================================
 
@@ -25,7 +25,7 @@ QUICK INSTALL
   1. Open the folder "1-Windows-Installer".
   2. Double-click MobileShopManagerPro-Setup-${v}.exe
   3. If Windows shows "Windows protected your PC", click "More info", then "Run anyway".
-  4. Open the app, go to Settings > Licence and paste the licence key from your Gumroad receipt.
+  4. Open the app, go to Settings > Licence and paste the licence key you received with your purchase.
 
 NO INSTALLATION?
   Use the portable version in "2-Portable-Version". Copy it to any folder or USB drive and run it.

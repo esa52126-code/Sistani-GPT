@@ -51,7 +51,7 @@ gumroad/             product listing, seller guide, screenshots
 - **Security.** Context isolation on, Node integration off, sandboxed renderer, strict Content-Security-Policy, navigation and new windows blocked, all web requests other than local files cancelled. Every IPC call is checked against a whitelist and validated again in the services.
 - **One source of truth for money.** `calcSale` in `src/shared/format.js` is used by the sale screen and by the service that saves the sale.
 - **Financial history is append-only.** Sales can be voided with a reason, never deleted; anything referenced by a sale cannot be deleted.
-- **Licensing is separate from data.** Licence state lives in `license.db`; the shop database knows nothing about it. See `gumroad/SELLER-GUIDE.md`.
+- **Licensing is separate from data.** Licence state lives in `license.db`; the shop database knows nothing about it. Two key types are accepted: Gumroad keys (verified online) and universal `MSM1-` keys signed with the seller's private key and verified offline with the public key in `license.config.json`. The private key and key generator live in `seller-private/`, which is never committed. See `gumroad/SELLER-GUIDE.md`.
 
 ## What has been verified, and what has not
 

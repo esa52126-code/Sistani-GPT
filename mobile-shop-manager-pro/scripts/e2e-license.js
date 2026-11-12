@@ -17,9 +17,9 @@ const http = require('node:http'), fs = require('node:fs'), os = require('node:o
   const res = [], ok = (c, m) => { res.push(!!c); console.log((c ? '  ✓ ' : '  ✗ ') + m); };
   ok(/Trial/.test(await page.textContent('#lic-pill')), 'starts as a trial when licensing is configured');
   await page.click('.nav button[data-page="settings"]'); await page.click('.tabs button:has-text("Licence")');
-  await page.fill('input[placeholder^="XXXXXXXX"]', 'WRONG000-WRONG000-WRONG000-WRONG000'); await page.click('button:has-text("Activate")'); await page.waitForSelector('.toast.err');
+  await page.fill('textarea[placeholder^="Paste your licence"]', 'WRONG000-WRONG000-WRONG000-WRONG000'); await page.click('button:has-text("Activate")'); await page.waitForSelector('.toast.err');
   ok(/not valid/.test(await page.textContent('.toast.err')), 'invalid key shows a clear error');
-  await page.fill('input[placeholder^="XXXXXXXX"]', 'ABCD1234-EFGH5678-IJKL9012-MNOP3456'); await page.click('button:has-text("Activate")'); await page.waitForSelector('.badge:has-text("Licensed")');
+  await page.fill('textarea[placeholder^="Paste your licence"]', 'ABCD1234-EFGH5678-IJKL9012-MNOP3456'); await page.click('button:has-text("Activate")'); await page.waitForSelector('.badge:has-text("Licensed")');
   ok(true, 'valid key activates through the main process'); ok(/buyer@example.com/.test(await page.textContent('.kv')), 'activation details shown');
   ok(!(await page.textContent('.kv')).includes('EFGH5678'), 'key is masked in the interface');
   if (process.argv[2]) await page.screenshot({ path: process.argv[2] });
