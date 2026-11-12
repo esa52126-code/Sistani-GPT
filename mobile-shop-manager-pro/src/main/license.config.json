@@ -1,6 +1,6 @@
 {
   "_readme": "Seller configuration for Gumroad licensing. productId is the public product ID shown on your Gumroad product's edit page (Content > License key module). It is NOT a secret. Leave productId empty to build an unlocked copy with licensing switched off.",
-  "productId": "",
+  "productId": "nEoA6sv0DXaiWI1li1A3bg==",
   "productPermalink": "",
   "purchaseUrl": "",
   "supportEmail": "",
