@@ -1,5 +1,5 @@
 {
-  "name": "Tauzih AI",
+  "name": "Sistani GPT",
   "description": "Ayatollah Sistani's Tauzihul Masail AI Chatbot that answers from the book's full text with Masla references, copy and PDF download, in Urdu, English, Roman Urdu, Farsi, and Arabic.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

@@ -54,8 +54,8 @@ fun strings(language: AppLanguage): UiStrings = when (language) {
 }
 
 private val urdu = UiStrings(
-    appTitle = "توضیح المسائل AI",
-    subtitle = "آیت اللہ العظمیٰ سید علی سیستانی (دام ظلہ)",
+    appTitle = "Sistani GPT",
+    subtitle = "توضیح المسائل — آیت اللہ العظمیٰ سیستانی",
     tabChat = "سوال و جواب",
     tabBook = "کتاب",
     tabSaved = "محفوظ",
@@ -101,8 +101,8 @@ private val urdu = UiStrings(
 )
 
 private val english = UiStrings(
-    appTitle = "Tauzih ul Masail AI",
-    subtitle = "Ayatullah Sayyid Ali al-Sistani",
+    appTitle = "Sistani GPT",
+    subtitle = "Tauzih ul Masail — Ayatullah Sistani",
     tabChat = "Ask",
     tabBook = "Book",
     tabSaved = "Saved",
@@ -148,8 +148,8 @@ private val english = UiStrings(
 )
 
 private val romanUrdu = UiStrings(
-    appTitle = "Tauzih ul Masail AI",
-    subtitle = "Ayatullah Sayyid Ali Sistani",
+    appTitle = "Sistani GPT",
+    subtitle = "Tauzih ul Masail — Ayatullah Sistani",
     tabChat = "Sawal Jawab",
     tabBook = "Kitab",
     tabSaved = "Mehfooz",
@@ -195,8 +195,8 @@ private val romanUrdu = UiStrings(
 )
 
 private val farsi = UiStrings(
-    appTitle = "توضیح المسائل AI",
-    subtitle = "آیت‌الله العظمی سید علی سیستانی (دام ظله)",
+    appTitle = "Sistani GPT",
+    subtitle = "توضیح المسائل — آیت‌الله العظمی سیستانی",
     tabChat = "پرسش و پاسخ",
     tabBook = "کتاب",
     tabSaved = "ذخیره‌ها",
@@ -242,8 +242,8 @@ private val farsi = UiStrings(
 )
 
 private val arabic = UiStrings(
-    appTitle = "توضيح المسائل AI",
-    subtitle = "آية الله العظمى السيد علي السيستاني (دام ظله)",
+    appTitle = "Sistani GPT",
+    subtitle = "توضيح المسائل — آية الله العظمى السيستاني",
     tabChat = "سؤال وجواب",
     tabBook = "الكتاب",
     tabSaved = "المحفوظات",
