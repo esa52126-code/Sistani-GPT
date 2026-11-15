@@ -45,7 +45,11 @@ jobs:
       - name: Write key and keystore
         run: |
           printf 'GEMINI_API_KEY=%s\n' "$GEMINI_API_KEY" > .env
-          printf '%s' "$KEYSTORE_BASE64" | base64 -d > my-upload-key.jks
+          # Tolerate spaces or line breaks added when the secret was pasted.
+          printf '%s' "$KEYSTORE_BASE64" | tr -cd 'A-Za-z0-9+/=' | base64 -d > my-upload-key.jks \
+            || { echo "::error::KEYSTORE_BASE64 is not valid: paste the whole text of keystore-base64.txt"; exit 1; }
+          keytool -list -keystore my-upload-key.jks -storepass "$STORE_PASSWORD" -alias upload > /dev/null \
+            || { echo "::error::Keystore could not be opened: check KEYSTORE_BASE64 and KEYSTORE_PASSWORD"; exit 1; }
 
       - name: Build
         run: gradle --no-daemon :app:bundleRelease :app:assembleRelease
