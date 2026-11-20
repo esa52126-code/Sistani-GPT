@@ -137,35 +137,11 @@ fun ChatScreen(
                 referencedPages = listOf(16),
                 referencedMasail = listOf(1)
             )
-            AppLanguage.ENGLISH -> ChatMessage(
-                id = "welcome_en",
-                text = "Assalamu Alaikum! I am your AI Jurisprudence Assistant for Ayatollah Sayyid Ali al-Husayni al-Sistani's 'Tauzih ul Masail' (542 Pages).\n\nAsk any question regarding Taharat, Namaz, Fasting, Khums, Zakat, Hajj, Nikah, or Muamalat. Every answer includes exact Masla & Page numbers with a direct link to open that page.",
-                isUser = false,
-                language = AppLanguage.ENGLISH,
-                referencedPages = listOf(16),
-                referencedMasail = listOf(1)
-            )
             AppLanguage.ROMAN_URDU -> ChatMessage(
                 id = "welcome_ru",
                 text = "Assalamu Alaikum! Main Ayatollah Sistani ki kitab 'Tauzih ul Masail' ka AI Assistant hoon.\n\nAap Taharat, Namaz, Roza, Khums, Zakat, Hajj, Nikah, Talaq waghera ka koi bhi masla pooch sakte hain. Har jawab me exact Masla aur Page number ka link milega jahan se aap direct page parh aur download kar sakte hain.",
                 isUser = false,
                 language = AppLanguage.ROMAN_URDU,
-                referencedPages = listOf(16),
-                referencedMasail = listOf(1)
-            )
-            AppLanguage.FARSI -> ChatMessage(
-                id = "welcome_fa",
-                text = "سلام علیکم! من دستیار هوشمند فتاوای حضرت آیت الله العظمی سید علی حسینی سیستانی در کتاب «توضیح المسائل» هستم.\n\nشما می‌توانید هرگونه سوال در باب طهارت، نماز، روزه، خمس، زکات، حج، نکاح و معاملات مطرح نمایید. پاسخ‌ها همراه با شماره دقیق مسئله و شماره صفحه کتاب ارائه می‌شود.",
-                isUser = false,
-                language = AppLanguage.FARSI,
-                referencedPages = listOf(16),
-                referencedMasail = listOf(1)
-            )
-            AppLanguage.ARABIC -> ChatMessage(
-                id = "welcome_ar",
-                text = "السلام عليكم ورحمة الله! أنا المساعد الذكي لفتاوى سماحة آية الله العظمى السيد علي الحسيني السيستاني (دام ظله) في کتاب «توضيح المسائل».\n\nيمكنكم طرح أي مسألة فقهية، وستحصلون على الحكم بدقة مع رقم المسألة ورقم الصفحة ورابط قراءتها وتحميلها مباشرة.",
-                isUser = false,
-                language = AppLanguage.ARABIC,
                 referencedPages = listOf(16),
                 referencedMasail = listOf(1)
             )
@@ -187,14 +163,6 @@ fun ChatScreen(
                 "غسل جنابت کا ترتیبی طریقہ کیا ہے؟",
                 "زکوٰۃ فطرہ کی مقدار اور مصرف کیا ہے؟"
             )
-            AppLanguage.ENGLISH -> listOf(
-                "What are the 9 things that invalidate the fast?",
-                "What are the conditions for traveler's Qasr prayer?",
-                "How to perform Wudhu properly step by step?",
-                "What items are subject to Khums and how is it calculated?",
-                "How to perform Ghusl Janabat correctly?",
-                "Who is eligible to receive Zakat-ul-Fitrah?"
-            )
             AppLanguage.ROMAN_URDU -> listOf(
                 "Roza kin 9 cheezon se batil hota hai?",
                 "Musafir ki namaz qasr hone ki sharait kya hain?",
@@ -202,22 +170,6 @@ fun ChatScreen(
                 "Khums ka hisab kaise lagaya jata hai?",
                 "Ghusl janabat ka tarteebi tareeqa batayein",
                 "Zakat-e-fitrah kitni deni hoti hai?"
-            )
-            AppLanguage.FARSI -> listOf(
-                "مبطلات نه گانه روزه کدامند؟",
-                "شرایط هشتگانه شکسته شدن نماز مسافر",
-                "روش صحیح وضو گرفتن چگونه است؟",
-                "خمس به چه چیزهایی تعلق می‌گیرد؟",
-                "احکام و کیفیت غسل جنابت ترتیبی",
-                "میزان و مصرف زکات فطره چقدر است؟"
-            )
-            AppLanguage.ARABIC -> listOf(
-                "ما هي مفطرات الصوم التسعة؟",
-                "ما هي شروط قصر صلاة المسافر؟",
-                "كيفية الوضوء الصحيحة وأحكامه؟",
-                "ما هي الأموال التي يتعلق بها الخمس؟",
-                "كيفية غسل الجنابة الترتيبي والارتماسي؟",
-                "مقدار زكاة الفطرة ومصارفها الشرعية؟"
             )
         }
     }
@@ -243,7 +195,7 @@ fun ChatScreen(
                     id = UUID.randomUUID().toString(),
                     text = aiResp.text,
                     isUser = false,
-                    language = currentLanguage,
+                    language = aiResp.language ?: currentLanguage,
                     referencedPages = aiResp.referencedPages,
                     referencedMasail = aiResp.referencedMasail
                 )
@@ -479,10 +431,7 @@ fun ChatScreen(
                             Text(
                                 text = when (currentLanguage) {
                                     AppLanguage.URDU -> "مسئلہ یا سوال درج کریں (آف لائن دستیاب)..."
-                                    AppLanguage.ENGLISH -> "Ask a fiqh question (offline ready)..."
                                     AppLanguage.ROMAN_URDU -> "Sawal ya masla likhein (offline ready)..."
-                                    AppLanguage.FARSI -> "سوال شرعی بنویسید (آفلاین)..."
-                                    AppLanguage.ARABIC -> "اكتب سؤالك الشرعي (يعمل بدون انترنت)..."
                                 },
                                 fontSize = 13.sp
                             )
@@ -607,8 +556,6 @@ fun ChatScreen(
                                 ttsEngine?.let { tts ->
                                     when (msg.language) {
                                         AppLanguage.URDU -> tts.language = Locale.forLanguageTag("ur")
-                                        AppLanguage.ARABIC -> tts.language = Locale.forLanguageTag("ar")
-                                        AppLanguage.FARSI -> tts.language = Locale.forLanguageTag("fa")
                                         else -> tts.language = Locale.ENGLISH
                                     }
                                     tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "msg_tts")

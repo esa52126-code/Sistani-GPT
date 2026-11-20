@@ -2,10 +2,7 @@ package com.example.data
 
 enum class AppLanguage(val code: String, val displayName: String, val nativeName: String, val isRtl: Boolean) {
     URDU("ur", "Urdu", "اردو", true),
-    ENGLISH("en", "English", "English", false),
-    ROMAN_URDU("ur-Latn", "Roman Urdu", "Roman Urdu", false),
-    FARSI("fa", "Farsi", "فارسی", true),
-    ARABIC("ar", "Arabic", "العربية", true)
+    ROMAN_URDU("ur-Latn", "Roman Urdu", "Roman Urdu", false)
 }
 
 data class TauzihChapter(

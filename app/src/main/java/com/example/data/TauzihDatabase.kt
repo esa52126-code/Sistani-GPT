@@ -879,6 +879,25 @@ object TauzihDatabase {
     )
 
     fun getPage(pageNumber: Int): TauzihPage {
+        // Real text of the printed page, bundled with the app (works offline)
+        BookRepository.pageText(pageNumber)?.let { text ->
+            val chapter = findChapterForPage(pageNumber) ?: chapters.first()
+            val onPage = BookRepository.masailOnPage(pageNumber).map { it.number }
+            return TauzihPage(
+                pageNumber = pageNumber,
+                chapterTitleUrdu = chapter.titleUrdu,
+                chapterTitleEnglish = chapter.titleEnglish,
+                masailRange = when {
+                    onPage.isEmpty() -> chapter.titleUrdu
+                    onPage.size == 1 -> "مسئلہ ${onPage.first()}"
+                    else -> "مسئلہ ${onPage.first()} تا ${onPage.last()}"
+                },
+                subHeadings = listOf(chapter.titleUrdu, chapter.category),
+                contentUrdu = text,
+                primaryMasail = onPage
+            )
+        }
+
         // Return exact page if available in curated database
         pageDatabase[pageNumber]?.let { return it }
 

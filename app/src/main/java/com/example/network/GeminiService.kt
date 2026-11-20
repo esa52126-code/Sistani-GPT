@@ -2,6 +2,10 @@ package com.example.network
 
 import com.example.BuildConfig
 import com.example.data.AppLanguage
+import com.example.data.BookRepository
+import com.example.data.LanguageDetector
+import com.example.data.RomanUrdu
+import com.example.data.Masla
 import com.example.data.TauzihDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -18,18 +22,15 @@ object GeminiService {
     private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent"
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(40, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
     private fun getSystemInstruction(language: AppLanguage): String {
         val langSpecific = when (language) {
             AppLanguage.URDU -> "جواب لازمی سلیس اور باوقار اردو زبان میں تحریر کریں۔ ہر جواب کے آغاز میں یا آخر میں واضح طور پر 'مسئلہ نمبر' اور 'صفحہ نمبر' درج کریں۔"
-            AppLanguage.ENGLISH -> "Provide the answer strictly in clear English. Clearly mention the Masla Number and Page Number from Tauzih ul Masail."
             AppLanguage.ROMAN_URDU -> "Jawab Roman Urdu (English alphabet me Urdu) me dein. Wazeh taur par Masla Number aur Page Number lazmi darj karein."
-            AppLanguage.FARSI -> "پاسخ را به زبان فصیح فارسی ارائه دهید و شماره مسئله و شماره صفحه را دقیقا مشخص کنید."
-            AppLanguage.ARABIC -> "قدم الإجابة باللغة العربية الفصحى مع ذكر رقم المسألة ورقم الصفحة من توضيح المسائل بدقة."
         }
 
         return """
@@ -85,15 +86,20 @@ MANDATORY RESPONSE FORMAT:
 
     suspend fun askTauzihAi(
         userQuery: String,
-        language: AppLanguage,
+        selectedLanguage: AppLanguage,
         conversationHistory: List<Pair<String, Boolean>> = emptyList()
     ): Result<AiResponse> = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
+        // Answer in the language the question is written in (falls back to the app's language).
+        val language = LanguageDetector.detect(userQuery, selectedLanguage)
 
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-            // Offline intelligent fallback using local database
-            return@withContext Result.success(getOfflineFallback(userQuery, language))
+            // No API key: answer straight from the book, fully offline
+            return@withContext Result.success(offlineAnswer(userQuery, language, emptyList()))
         }
+
+        // Passages from the bundled book text keep online answers grounded.
+        val bookHits = try { BookRepository.search(userQuery, 6) } catch (e: Exception) { emptyList() }
 
         try {
             val requestJson = JSONObject().apply {
@@ -123,17 +129,17 @@ MANDATORY RESPONSE FORMAT:
                     })
                 }
 
-                // Append current user query
+                // Append current user query together with the matching masail from the book
                 contentsArray.put(JSONObject().apply {
                     put("role", "user")
-                    put("parts", JSONArray().put(JSONObject().put("text", userQuery)))
+                    put("parts", JSONArray().put(JSONObject().put("text", userQuery + buildBookContext(bookHits))))
                 })
 
                 put("contents", contentsArray)
 
                 // System Instruction
                 put("systemInstruction", JSONObject().apply {
-                    put("parts", JSONArray().put(JSONObject().put("text", getSystemInstruction(language))))
+                    put("parts", JSONArray().put(JSONObject().put("text", getSystemInstruction(language) + BOOK_CONTEXT_RULES)))
                 })
 
                 // Generation config
@@ -146,7 +152,13 @@ MANDATORY RESPONSE FORMAT:
 
             val requestBody = requestJson.toString().toRequestBody("application/json".toMediaType())
             val request = Request.Builder()
-                .url("$BASE_URL?key=$apiKey")
+                .url(BASE_URL)
+                .header("x-goog-api-key", apiKey)
+                .apply {
+                    // Lets a key restricted to this Android app in Google Cloud work only from it.
+                    if (AppIdentity.packageName.isNotEmpty()) header("X-Android-Package", AppIdentity.packageName)
+                    if (AppIdentity.certSha1.isNotEmpty()) header("X-Android-Cert", AppIdentity.certSha1)
+                }
                 .post(requestBody)
                 .build()
 
@@ -154,8 +166,8 @@ MANDATORY RESPONSE FORMAT:
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                // Return fallback if API fails
-                return@withContext Result.success(getOfflineFallback(userQuery, language))
+                // API failed (no internet, quota, ...): answer from the book offline
+                return@withContext Result.success(offlineAnswer(userQuery, language, bookHits))
             }
 
             val rootJson = JSONObject(responseBody)
@@ -166,17 +178,68 @@ MANDATORY RESPONSE FORMAT:
             val text = parts?.optJSONObject(0)?.optString("text") ?: ""
 
             if (text.isNotBlank()) {
-                val parsed = parseResponse(text, userQuery)
+                val parsed = parseResponse(text, userQuery, bookHits, language)
                 return@withContext Result.success(parsed)
             } else {
-                return@withContext Result.success(getOfflineFallback(userQuery, language))
+                return@withContext Result.success(offlineAnswer(userQuery, language, bookHits))
             }
         } catch (e: Exception) {
-            return@withContext Result.success(getOfflineFallback(userQuery, language))
+            return@withContext Result.success(offlineAnswer(userQuery, language, bookHits))
         }
     }
 
-    private fun parseResponse(rawText: String, query: String): AiResponse {
+    private const val BOOK_CONTEXT_RULES = """
+
+BOOK TEXT PROVIDED WITH EACH QUESTION:
+- The user's message may end with a section "BOOK EXCERPTS" containing the exact text of the most relevant masail from Tauzih ul Masail, each labelled [MASLA: n | PAGE: p].
+- Base your answer on these excerpts. Use their masla and page numbers exactly as given; never invent or estimate numbers.
+- If the excerpts do not answer the question, say so honestly and suggest which topic of the book to look at, instead of guessing a ruling.
+- Give ONE answer only: pick the single masla that best answers the question and explain only that ruling. Ignore excerpts that are not about the question; do not list or mention other masail. Include exactly one [MASLA: n] and one [PAGE: p].
+- Write the whole answer in the language required above (translate the Urdu book text into that language when needed).
+"""
+
+    /** Adds the matching masail (exact book text) to the user's message for grounding. */
+    private fun buildBookContext(hits: List<Masla>): String {
+        if (hits.isEmpty()) return ""
+        val sb = StringBuilder("\n\n---\nBOOK EXCERPTS (Tauzih ul Masail, exact text):\n")
+        hits.forEach { m ->
+            sb.append("\n[MASLA: ${m.number} | PAGE: ${m.page}]\n")
+            sb.append(if (m.text.length > 1500) m.text.take(1500) + " …" else m.text)
+            sb.append('\n')
+        }
+        return sb.toString()
+    }
+
+    /** Offline answer: the single best matching masla, quoted straight from the book. */
+    private fun offlineAnswer(query: String, language: AppLanguage, @Suppress("UNUSED_PARAMETER") hits: List<Masla>): AiResponse {
+        if (isGreeting(query.lowercase().trim())) return getOfflineFallback(query, language)
+        val m = try { BookRepository.searchRelevant(query, 1).firstOrNull() } catch (e: Exception) { null }
+            ?: return notFoundAnswer(language)
+        val text = when (language) {
+            AppLanguage.URDU ->
+                "مسئلہ ${m.number} (صفحہ ${m.page})\n\n${m.text}"
+            AppLanguage.ROMAN_URDU ->
+                "Masla ${m.number} (Page ${m.page})\n\n${RomanUrdu.transliterate(m.text)}\n\n" +
+                    "(Offline: kitab ka text Roman huroof me badla gaya hai. Internet hone par AI behtar jawab dega.)"
+        }
+        return AiResponse(text = text, referencedPages = listOf(m.page), referencedMasail = listOf(m.number), language = language)
+    }
+
+    /** Shown offline when no masla matches the question clearly enough. */
+    private fun notFoundAnswer(language: AppLanguage): AiResponse {
+        val text = when (language) {
+            AppLanguage.URDU -> "معذرت، آف لائن تلاش میں اس سوال سے واضح طور پر متعلق کوئی مسئلہ نہیں ملا۔\n\nبراہ کرم سوال میں اصل موضوع کا لفظ لکھیں، مثلاً: \"روزہ کن چیزوں سے باطل ہوتا ہے\"، \"مسافر کی نماز\"، \"غسل جنابت کا طریقہ\" یا مسئلہ نمبر لکھیں (مثلاً مسئلہ ۱۵۸۱)۔ انٹرنیٹ ہونے پر AI تفصیلی جواب دے گا۔"
+            AppLanguage.ROMAN_URDU -> "Maazrat, offline search me is sawal se wazeh taur par mutalliq koi masla nahi mila.\n\nSawal me asal mauzu ka lafz likhein, maslan: \"roza kin cheezon se toot jata hai\", \"musafir ki namaz\", \"ghusl janabat ka tareeqa\" ya masla number likhein (maslan masla 1581). Internet hone par AI tafseeli jawab dega."
+        }
+        return AiResponse(text = text, referencedPages = emptyList(), referencedMasail = emptyList(), language = language)
+    }
+
+    private fun isGreeting(q: String): Boolean =
+        q in listOf("salam", "assalam", "hello", "hi", "hey", "slam", "kese ho", "kia hal ha") ||
+            q.startsWith("سلام") || q.startsWith("اسلام علیکم") || q.startsWith("السلام علیکم") ||
+            q.contains("کیسے ہو") || q.contains("کیا حال")
+
+    private fun parseResponse(rawText: String, query: String, bookHits: List<Masla> = emptyList(), language: AppLanguage = AppLanguage.URDU): AiResponse {
         val maslaRegex = Regex("\\[MASLA:\\s*(\\d+)\\]", RegexOption.IGNORE_CASE)
         val pageRegex = Regex("\\[PAGE:\\s*(\\d+)\\]", RegexOption.IGNORE_CASE)
 
@@ -190,8 +253,12 @@ MANDATORY RESPONSE FORMAT:
         val extraPages = Regex("(?:صفحہ|صفحہ نمبر|Page(?:\\s+No)?)\\s*[:#]?\\s*(\\d+)", RegexOption.IGNORE_CASE)
             .findAll(rawText).mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
 
-        val allMasail = (masailFound + extraMasail).distinct()
-        var allPages = (pagesFound + extraPages).filter { it in 1..542 }.distinct()
+        // One answer only: keep the first masla the model cites.
+        var allMasail = (masailFound + extraMasail).distinct().take(1)
+        if (allMasail.isEmpty()) allMasail = bookHits.take(1).map { it.number }
+        // Exact page of each cited masla from the bundled book text
+        val exactPages = allMasail.mapNotNull { BookRepository.masla(it)?.page }
+        var allPages = (if (exactPages.isNotEmpty()) exactPages else (pagesFound + extraPages).filter { it in 1..542 }).distinct().take(1)
 
         // If no page found but masla found, calculate page from chapter
         if (allPages.isEmpty() && allMasail.isNotEmpty()) {
@@ -213,7 +280,8 @@ MANDATORY RESPONSE FORMAT:
         return AiResponse(
             text = cleanText,
             referencedPages = allPages,
-            referencedMasail = allMasail
+            referencedMasail = allMasail,
+            language = language
         )
     }
 
@@ -247,8 +315,7 @@ MANDATORY RESPONSE FORMAT:
         }
 
         // Check for general greetings
-        if (q in listOf("salam", "assalam", "hello", "hi", "hey", "slam", "kese ho", "kia hal ha") || 
-            q.startsWith("سلام") || q.startsWith("اسلام علیکم") || q.startsWith("السلام علیکم") || q.contains("کیسے ہو") || q.contains("کیا حال")) {
+        if (isGreeting(q)) {
             val greetText = when (language) {
                 AppLanguage.URDU -> """
 وعلیکم السلام و رحمۃ اللہ!
@@ -264,25 +331,11 @@ MANDATORY RESPONSE FORMAT:
 
 براہ کرم اپنا مطلوبہ سوال تحریر فرمائیں!
                 """.trimIndent()
-                AppLanguage.ENGLISH -> """
-Wa Alaikum Assalam wa Rahmatullah!
-I am your AI Jurisprudence Assistant for Ayatollah Sayyid Ali al-Husayni al-Sistani's "Tauzih ul Masail" (542 Pages).
-
-You can ask any Islamic fiqh ruling, and I will provide the answer along with exact Masla and Page references and direct book links. Please feel free to ask your question!
-                """.trimIndent()
                 AppLanguage.ROMAN_URDU -> """
 Wa Alaikum Assalam wa Rahmatullah!
 Main Ayatollah Sayyid Ali al-Husayni al-Sistani ki kitab 'Tauzih ul Masail' ka Fiqhi Assistant hoon.
 
 Aap poori kitab (542 pages) me se koi bhi sawal pooch sakte hain. Har jawab me exact Masla Number aur Page Number ka direct link milega. Apna sawal likhein!
-                """.trimIndent()
-                AppLanguage.FARSI -> """
-و علیکم السلام و رحمة الله!
-من دستیار هوشمند فقهی کتاب «توضیح المسائل» حضرت آیت الله العظمی سیستانی هستم. لطفاً سوال شرعی خود را مطرح فرمایید تا همراه با شماره مسئله و صفحه پاسخ داده شود.
-                """.trimIndent()
-                AppLanguage.ARABIC -> """
-وعليكم السلام ورحمة الله وبركاته!
-أهلاً بكم في المساعد الفقهي لكتاب «توضيح المسائل» لسماحة آية الله العظمى السيد علي الحسيني السيستاني (دام ظله). تفضلوا بطرح مسألتكم الشرعية.
                 """.trimIndent()
             }
             return AiResponse(text = greetText, referencedPages = listOf(16), referencedMasail = listOf(1))
@@ -357,22 +410,6 @@ ${matchingChapter.description}
 (مکمل صفحہ اور متعلقہ مسائل کو براہِ راست پڑھنے، ڈاؤنلوڈ یا شیئر کرنے کے لئے نیچے دیئے گئے بٹن پر کلک کریں)
             """.trimIndent()
 
-            AppLanguage.ENGLISH -> """
-According to the official rulings of Ayatollah Sayyid Ali al-Husayni al-Sistani (Tauzih ul Masail):
-
-Chapter: ${matchingChapter.titleEnglish} (${matchingChapter.titleUrdu})
-Masla Number Reference: Masla $targetMasla (Range: Masail ${matchingChapter.maslaStart} to ${matchingChapter.maslaEnd})
-Book Page: Page $targetPageNum (of 542)
-
-Summary of Ruling:
-${matchingChapter.description}
-
-Reference Excerpt:
-"${samplePage.contentUrdu.take(280)}..."
-
-(Click the button below to directly open, view or download this page in the book reader)
-            """.trimIndent()
-
             AppLanguage.ROMAN_URDU -> """
 Ayatollah Sayyid Ali al-Husayni al-Sistani ki Tauzih ul Masail ke mutabiq:
 
@@ -386,31 +423,6 @@ ${matchingChapter.description}
 (Direct ye page dekhne, parhne aur download karne ke liye niche diye gaye button par click karein)
             """.trimIndent()
 
-            AppLanguage.FARSI -> """
-مطابق با فتاوای حضرت آیت الله العظمی سید علی حسینی سیستانی در کتاب «توضیح المسائل»:
-
-باب: ${matchingChapter.titleFarsi}
-شماره مسأله: مسأله $targetMasla (از مسأله ${matchingChapter.maslaStart} تا ${matchingChapter.maslaEnd})
-شماره صفحه: صفحه $targetPageNum (از کل ۵۴۲ صفحه)
-
-خلاصه احکام:
-${matchingChapter.description}
-
-(جهت مطالعه مستقیم، دانلود یا اشتراک‌گذاری متن این صفحه بر روی دکمه زیر کلیک فرمایید)
-            """.trimIndent()
-
-            AppLanguage.ARABIC -> """
-وفقاً لفتاوى سماحة المرجع الديني الأعلى آية الله العظمى السيد علي الحسيني السيستاني (دام ظله) في «توضيح المسائل»:
-
-الباب: ${matchingChapter.titleArabic}
-رقم المسألة: المسألة $targetMasla (نطاق المسائل ${matchingChapter.maslaStart} إلى ${matchingChapter.maslaEnd})
-رقم الصفحة: صفحة $targetPageNum (من ۵۴۲ صفحة)
-
-خلاصة الحكم الشرعي:
-${matchingChapter.description}
-
-(لمطالعة وتحميل الصفحة مباشرة من الكتاب، يرجى الضغط على الزر أدناه)
-            """.trimIndent()
         }
 
         return AiResponse(
@@ -424,5 +436,7 @@ ${matchingChapter.description}
 data class AiResponse(
     val text: String,
     val referencedPages: List<Int>,
-    val referencedMasail: List<Int>
+    val referencedMasail: List<Int>,
+    /** Language the answer is written in (used for text direction in the chat). */
+    val language: AppLanguage? = null
 )
