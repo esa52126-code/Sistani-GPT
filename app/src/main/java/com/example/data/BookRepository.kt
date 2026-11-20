@@ -34,6 +34,11 @@ object BookRepository {
                     val o = masailJson.getJSONObject(i)
                     masail.add(Masla(o.getInt("n"), o.getInt("p"), o.getString("t"), o.optString("h", "")))
                 }
+                try {
+                    RomanUrdu.load(readAsset(ctx, "roman_urdu.txt").lines())
+                } catch (e: Exception) {
+                    Log.w(TAG, "Roman Urdu dictionary missing", e)
+                }
                 val pagesJson = JSONArray(readAsset(ctx, "tauzih_pages.json"))
                 val pages = List(pagesJson.length()) { pagesJson.getString(it) }
                 BookIndex(masail, pages).also { index = it }

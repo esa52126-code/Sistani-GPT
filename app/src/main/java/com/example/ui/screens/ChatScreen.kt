@@ -243,7 +243,7 @@ fun ChatScreen(
                     id = UUID.randomUUID().toString(),
                     text = aiResp.text,
                     isUser = false,
-                    language = currentLanguage,
+                    language = aiResp.language ?: currentLanguage,
                     referencedPages = aiResp.referencedPages,
                     referencedMasail = aiResp.referencedMasail
                 )

@@ -3,6 +3,8 @@ package com.example.network
 import com.example.BuildConfig
 import com.example.data.AppLanguage
 import com.example.data.BookRepository
+import com.example.data.LanguageDetector
+import com.example.data.RomanUrdu
 import com.example.data.Masla
 import com.example.data.TauzihDatabase
 import kotlinx.coroutines.Dispatchers
@@ -87,10 +89,12 @@ MANDATORY RESPONSE FORMAT:
 
     suspend fun askTauzihAi(
         userQuery: String,
-        language: AppLanguage,
+        selectedLanguage: AppLanguage,
         conversationHistory: List<Pair<String, Boolean>> = emptyList()
     ): Result<AiResponse> = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
+        // Answer in the language the question is written in (falls back to the app's language).
+        val language = LanguageDetector.detect(userQuery, selectedLanguage)
 
         // Passages from the bundled book text. They work without internet and keep online answers grounded.
         val bookHits = try { BookRepository.search(userQuery, 6) } catch (e: Exception) { emptyList() }
@@ -171,7 +175,7 @@ MANDATORY RESPONSE FORMAT:
             val text = parts?.optJSONObject(0)?.optString("text") ?: ""
 
             if (text.isNotBlank()) {
-                val parsed = parseResponse(text, userQuery, bookHits)
+                val parsed = parseResponse(text, userQuery, bookHits, language)
                 return@withContext Result.success(parsed)
             } else {
                 return@withContext Result.success(offlineAnswer(userQuery, language, bookHits))
@@ -187,6 +191,8 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
 - The user's message may end with a section "BOOK EXCERPTS" containing the exact text of the most relevant masail from Tauzih ul Masail, each labelled [MASLA: n | PAGE: p].
 - Base your answer on these excerpts. Use their masla and page numbers exactly as given; never invent or estimate numbers.
 - If the excerpts do not answer the question, say so honestly and suggest which topic of the book to look at, instead of guessing a ruling.
+- Give ONE answer only: pick the single masla that best answers the question and explain only that ruling. Ignore excerpts that are not about the question; do not list or mention other masail. Include exactly one [MASLA: n] and one [PAGE: p].
+- Write the whole answer in the language required above (translate the Urdu book text into that language when needed).
 """
 
     /** Adds the matching masail (exact book text) to the user's message for grounding. */
@@ -201,41 +207,30 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
         return sb.toString()
     }
 
-    /** Offline answer: the best matching masail quoted straight from the book. */
+    /** Offline answer: the single best matching masla, quoted straight from the book. */
     private fun offlineAnswer(query: String, language: AppLanguage, @Suppress("UNUSED_PARAMETER") hits: List<Masla>): AiResponse {
         if (isGreeting(query.lowercase().trim())) return getOfflineFallback(query, language)
-        // Only masail that clearly match; unrelated ones are left out.
-        val top = try { BookRepository.searchRelevant(query, 3) } catch (e: Exception) { emptyList() }
-        if (top.isEmpty()) return notFoundAnswer(language)
-        val header = when (language) {
-            AppLanguage.URDU -> "کتاب توضیح المسائل میں سے آپ کے سوال سے متعلق مسائل (آف لائن):"
-            AppLanguage.ENGLISH -> "Related masail from Tauzih ul Masail (offline; book text is in Urdu):"
-            AppLanguage.ROMAN_URDU -> "Tauzih ul Masail se aap ke sawal se mutalliq masail (offline, kitab ka text Urdu me hai):"
-            AppLanguage.FARSI -> "مسائل مرتبط از کتاب توضیح المسائل (آفلاین، متن کتاب به زبان اردو است):"
-            AppLanguage.ARABIC -> "المسائل ذات الصلة من كتاب توضيح المسائل (دون اتصال، نص الكتاب باللغة الأردية):"
+        val m = try { BookRepository.searchRelevant(query, 1).firstOrNull() } catch (e: Exception) { null }
+            ?: return notFoundAnswer(language)
+        val text = when (language) {
+            AppLanguage.URDU ->
+                "مسئلہ ${m.number} (صفحہ ${m.page})\n\n${m.text}"
+            AppLanguage.ROMAN_URDU ->
+                "Masla ${m.number} (Page ${m.page})\n\n${RomanUrdu.transliterate(m.text)}\n\n" +
+                    "(Offline: kitab ka text Roman huroof me badla gaya hai. Internet hone par AI behtar jawab dega.)"
+            AppLanguage.ENGLISH ->
+                "Masla ${m.number} (Page ${m.page})\n\n${m.text}\n\n" +
+                    "(Offline: the book text is in Urdu. An English answer needs an internet connection.)"
+            AppLanguage.FARSI ->
+                "مسئله ${m.number} (صفحه ${m.page})\n\n${m.text}\n\n" +
+                    "(آفلاین: متن کتاب به زبان اردو است. برای پاسخ به فارسی اتصال به اینترنت لازم است.)"
+            AppLanguage.ARABIC ->
+                "المسألة ${m.number} (صفحة ${m.page})\n\n${m.text}\n\n" +
+                    "(دون اتصال: نص الكتاب باللغة الأردية. للإجابة بالعربية يلزم الاتصال بالإنترنت.)"
         }
-        val body = top.joinToString("\n\n") { m ->
-            val label = when (language) {
-                AppLanguage.URDU -> "مسئلہ ${m.number} (صفحہ ${m.page})"
-                AppLanguage.ENGLISH -> "Masla ${m.number} (Page ${m.page})"
-                AppLanguage.ROMAN_URDU -> "Masla ${m.number} (Page ${m.page})"
-                AppLanguage.FARSI -> "مسئله ${m.number} (صفحه ${m.page})"
-                AppLanguage.ARABIC -> "المسألة ${m.number} (صفحة ${m.page})"
-            }
-            "$label\n${m.text}"
-        }
-        val footer = when (language) {
-            AppLanguage.URDU -> "(مکمل صفحہ پڑھنے کے لئے نیچے دیئے گئے صفحے کے بٹن پر کلک کریں۔ انٹرنیٹ ہونے پر AI تفصیلی جواب دے گا۔)"
-            AppLanguage.ENGLISH -> "(Tap a page button below to read the full page. With internet, the AI gives a detailed answer.)"
-            AppLanguage.ROMAN_URDU -> "(Poora page parhne ke liye neeche page ke button par click karein. Internet hone par AI tafseeli jawab dega.)"
-            AppLanguage.FARSI -> "(برای مطالعه کامل صفحه روی دکمه صفحه در پایین بزنید.)"
-            AppLanguage.ARABIC -> "(لقراءة الصفحة كاملة اضغط على زر الصفحة أدناه.)"
-        }
-        return AiResponse(
-            text = "$header\n\n$body\n\n$footer",
-            referencedPages = top.map { it.page }.distinct(),
-            referencedMasail = top.map { it.number }
-        )
+        // English offline answers carry Urdu book text, so show them right-to-left.
+        val displayLanguage = if (language == AppLanguage.ENGLISH) AppLanguage.URDU else language
+        return AiResponse(text = text, referencedPages = listOf(m.page), referencedMasail = listOf(m.number), language = displayLanguage)
     }
 
     /** Shown offline when no masla matches the question clearly enough. */
@@ -247,7 +242,7 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
             AppLanguage.FARSI -> "متأسفانه در جستجوی آفلاین مسئله‌ای که به‌روشنی با این سؤال مرتبط باشد پیدا نشد. لطفاً کلمه اصلی موضوع یا شماره مسئله را بنویسید."
             AppLanguage.ARABIC -> "عذراً، لم يُعثر في البحث دون اتصال على مسألة مرتبطة بوضوح بهذا السؤال. يرجى كتابة الكلمة الأساسية للموضوع أو رقم المسألة."
         }
-        return AiResponse(text = text, referencedPages = emptyList(), referencedMasail = emptyList())
+        return AiResponse(text = text, referencedPages = emptyList(), referencedMasail = emptyList(), language = language)
     }
 
     private fun isGreeting(q: String): Boolean =
@@ -255,7 +250,7 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
             q.startsWith("سلام") || q.startsWith("اسلام علیکم") || q.startsWith("السلام علیکم") ||
             q.contains("کیسے ہو") || q.contains("کیا حال")
 
-    private fun parseResponse(rawText: String, query: String, bookHits: List<Masla> = emptyList()): AiResponse {
+    private fun parseResponse(rawText: String, query: String, bookHits: List<Masla> = emptyList(), language: AppLanguage = AppLanguage.URDU): AiResponse {
         val maslaRegex = Regex("\\[MASLA:\\s*(\\d+)\\]", RegexOption.IGNORE_CASE)
         val pageRegex = Regex("\\[PAGE:\\s*(\\d+)\\]", RegexOption.IGNORE_CASE)
 
@@ -269,11 +264,12 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
         val extraPages = Regex("(?:صفحہ|صفحہ نمبر|Page(?:\\s+No)?)\\s*[:#]?\\s*(\\d+)", RegexOption.IGNORE_CASE)
             .findAll(rawText).mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
 
-        var allMasail = (masailFound + extraMasail).distinct()
-        if (allMasail.isEmpty()) allMasail = bookHits.take(2).map { it.number }
+        // One answer only: keep the first masla the model cites.
+        var allMasail = (masailFound + extraMasail).distinct().take(1)
+        if (allMasail.isEmpty()) allMasail = bookHits.take(1).map { it.number }
         // Exact page of each cited masla from the bundled book text
         val exactPages = allMasail.mapNotNull { BookRepository.masla(it)?.page }
-        var allPages = (exactPages + (pagesFound + extraPages).filter { it in 1..542 }).distinct()
+        var allPages = (if (exactPages.isNotEmpty()) exactPages else (pagesFound + extraPages).filter { it in 1..542 }).distinct().take(1)
 
         // If no page found but masla found, calculate page from chapter
         if (allPages.isEmpty() && allMasail.isNotEmpty()) {
@@ -295,7 +291,8 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
         return AiResponse(
             text = cleanText,
             referencedPages = allPages,
-            referencedMasail = allMasail
+            referencedMasail = allMasail,
+            language = language
         )
     }
 
@@ -505,5 +502,7 @@ ${matchingChapter.description}
 data class AiResponse(
     val text: String,
     val referencedPages: List<Int>,
-    val referencedMasail: List<Int>
+    val referencedMasail: List<Int>,
+    /** Language the answer is written in (used for text direction in the chat). */
+    val language: AppLanguage? = null
 )
