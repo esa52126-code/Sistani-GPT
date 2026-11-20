@@ -1,0 +1,48 @@
+name: Build test APK
+
+on:
+  push:
+    branches: [main, ccr-9dbc7059-sgyyq0]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.3.1
+
+      # The debug signing config expects this keystore at the project root.
+      - name: Create debug keystore
+        run: |
+          keytool -genkeypair -v -keystore debug.keystore -storepass android \
+            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
+      # Optional: add a repository secret named GEMINI_API_KEY to enable online AI answers.
+      # Without it the APK answers offline from the bundled book text.
+      - name: Write .env
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY=$GEMINI_API_KEY" > .env; fi
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sistani-GPT-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
