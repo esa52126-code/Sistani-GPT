@@ -35,7 +35,19 @@ jobs:
           keytool -genkeypair -keystore ci-temp.jks -storepass cipass123 -alias upload \
             -keypass cipass123 -keyalg RSA -keysize 2048 -validity 1000 -dname "CN=CI"
 
-      - name: Build release bundle (offline, no API key)
+      # Optional repository secret GEMINI_API_KEY turns on online AI answers.
+      - name: Write .env
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "GEMINI_API_KEY=$GEMINI_API_KEY" > .env
+            echo "Gemini API key: included"
+          else
+            echo "::warning::GEMINI_API_KEY secret not set - building the offline-only app"
+          fi
+
+      - name: Build release bundle
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/ci-temp.jks
           STORE_PASSWORD: cipass123

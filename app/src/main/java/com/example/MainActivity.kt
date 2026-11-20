@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Load the bundled book text in the background so search and reading work offline
         BookRepository.init(applicationContext)
+        com.example.network.AppIdentity.init(applicationContext)
         Thread { BookRepository.ensureLoaded() }.start()
         enableEdgeToEdge()
         setContent {

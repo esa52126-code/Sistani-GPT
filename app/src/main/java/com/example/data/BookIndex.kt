@@ -23,6 +23,9 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
     private val docLen: IntArray
     /** Terms that occur at the start of a masla, where its subject is usually stated. */
     private val leadTerms: Array<Set<String>>
+    /** Tokens of each masla (and of its heading plus opening), kept for proximity scoring. */
+    private val docTokens: Array<List<String>>
+    private val headTokens: Array<List<String>>
     private val avgLen: Double
 
     init {
@@ -30,11 +33,16 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
         val tmpTf = HashMap<String, MutableList<Int>>()
         docLen = IntArray(masail.size)
         val leads = ArrayList<Set<String>>(masail.size)
+        val docToks = ArrayList<List<String>>(masail.size)
+        val headToks = ArrayList<List<String>>(masail.size)
         masail.forEachIndexed { i, m ->
             val counts = HashMap<String, Int>()
             val headingTerms = indexTerms(m.heading)
+            val textTerms = indexTerms(m.text)
+            docToks.add(textTerms)
+            headToks.add(headingTerms + textTerms.take(40))
             // Section headings name the topic ("وضو کا طریقہ"), so they count double.
-            val terms = indexTerms(m.text) + headingTerms + headingTerms
+            val terms = textTerms + headingTerms + headingTerms
             docLen[i] = terms.size
             leads.add((terms.take(LEAD_TERMS) + headingTerms).toHashSet())
             for (t in terms) counts[t] = (counts[t] ?: 0) + 1
@@ -44,6 +52,8 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
             }
         }
         leadTerms = leads.toTypedArray()
+        docTokens = docToks.toTypedArray()
+        headTokens = headToks.toTypedArray()
         postings = tmpDocs.mapValues { it.value.toIntArray() }
         postingTf = tmpTf.mapValues { it.value.toIntArray() }
         avgLen = if (masail.isEmpty()) 1.0 else docLen.average().coerceAtLeast(1.0)
@@ -116,11 +126,12 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
         // Reward masail where the query words stand close together (same sentence).
         val candidates = scores.indices.filter { scores[it] > 0 }.sortedByDescending { scores[it] }.take(80)
         if (terms.size > 1) {
+            val termSet = terms.toSet()
             for (d in candidates) {
                 if (matched[d] < 2) continue
                 val span = minOf(
-                    closestSpan(indexTerms(masail[d].text), terms.toSet()),
-                    closestSpan(indexTerms(masail[d].heading + " " + masail[d].text.take(200)), terms.toSet())
+                    closestSpan(docTokens[d], termSet),
+                    closestSpan(headTokens[d], termSet)
                 )
                 scores[d] *= when {
                     span <= 6 -> 1.6
@@ -392,11 +403,46 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
             return t
         }
 
-        private fun indexTerms(text: String): List<String> =
-            TOKEN.findAll(normalize(text)).map { it.value }
-                .filter { it !in STOPWORDS && !it.all(Char::isDigit) }
-                .map(::stem)
-                .toList()
+        /** Normalised, stemmed tokens of [text] without stopwords (single pass, no regex). */
+        private fun indexTerms(text: String): List<String> {
+            val out = ArrayList<String>(text.length / 5)
+            val sb = StringBuilder(16)
+            fun flush() {
+                if (sb.isEmpty()) return
+                val tok = sb.toString()
+                sb.setLength(0)
+                if (tok !in STOPWORDS && !tok.all(Char::isDigit)) out.add(stem(tok))
+            }
+            for (ch in text) {
+                val c = normChar(ch)
+                when {
+                    c == '\u0000' -> {}            // diacritic / joiner: skip, word continues
+                    c.isLetterOrDigit() -> sb.append(c)
+                    else -> flush()
+                }
+            }
+            flush()
+            return out
+        }
+
+        /** Same mapping as [normalize] for one char; '\u0000' means "drop this char". */
+        private fun normChar(ch: Char): Char {
+            val u = URDU_DIGITS.indexOf(ch)
+            if (u >= 0) return '0' + u
+            val a = ARABIC_DIGITS.indexOf(ch)
+            if (a >= 0) return '0' + a
+            if (ch in '\u064B'..'\u065F' || ch == '\u0670' || ch in '\u06D6'..'\u06ED' || ch == '\u0640' ||
+                ch in '\u200C'..'\u200F') return '\u0000'
+            return when (ch) {
+                'ي', 'ى', 'ئ' -> 'ی'
+                'ك' -> 'ک'
+                'ه', 'ۀ', 'ة', 'ۃ' -> 'ہ'
+                'أ', 'إ', 'ٱ' -> 'ا'
+                'ؤ' -> 'و'
+                'ۓ' -> 'ے'
+                else -> ch.lowercaseChar()
+            }
+        }
 
         fun queryTerms(query: String): List<String> {
             val out = LinkedHashSet<String>()

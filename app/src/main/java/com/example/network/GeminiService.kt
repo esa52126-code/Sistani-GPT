@@ -22,8 +22,8 @@ object GeminiService {
     private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent"
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(40, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
@@ -93,13 +93,13 @@ MANDATORY RESPONSE FORMAT:
         // Answer in the language the question is written in (falls back to the app's language).
         val language = LanguageDetector.detect(userQuery, selectedLanguage)
 
-        // Passages from the bundled book text. They work without internet and keep online answers grounded.
-        val bookHits = try { BookRepository.search(userQuery, 6) } catch (e: Exception) { emptyList() }
-
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
             // No API key: answer straight from the book, fully offline
-            return@withContext Result.success(offlineAnswer(userQuery, language, bookHits))
+            return@withContext Result.success(offlineAnswer(userQuery, language, emptyList()))
         }
+
+        // Passages from the bundled book text keep online answers grounded.
+        val bookHits = try { BookRepository.search(userQuery, 6) } catch (e: Exception) { emptyList() }
 
         try {
             val requestJson = JSONObject().apply {
@@ -152,7 +152,13 @@ MANDATORY RESPONSE FORMAT:
 
             val requestBody = requestJson.toString().toRequestBody("application/json".toMediaType())
             val request = Request.Builder()
-                .url("$BASE_URL?key=$apiKey")
+                .url(BASE_URL)
+                .header("x-goog-api-key", apiKey)
+                .apply {
+                    // Lets a key restricted to this Android app in Google Cloud work only from it.
+                    if (AppIdentity.packageName.isNotEmpty()) header("X-Android-Package", AppIdentity.packageName)
+                    if (AppIdentity.certSha1.isNotEmpty()) header("X-Android-Cert", AppIdentity.certSha1)
+                }
                 .post(requestBody)
                 .build()
 
