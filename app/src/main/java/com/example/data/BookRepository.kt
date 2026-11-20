@@ -32,7 +32,7 @@ object BookRepository {
                 val masail = ArrayList<Masla>(masailJson.length())
                 for (i in 0 until masailJson.length()) {
                     val o = masailJson.getJSONObject(i)
-                    masail.add(Masla(o.getInt("n"), o.getInt("p"), o.getString("t")))
+                    masail.add(Masla(o.getInt("n"), o.getInt("p"), o.getString("t"), o.optString("h", "")))
                 }
                 val pagesJson = JSONArray(readAsset(ctx, "tauzih_pages.json"))
                 val pages = List(pagesJson.length()) { pagesJson.getString(it) }
@@ -48,6 +48,9 @@ object BookRepository {
         ctx.assets.open(name).bufferedReader(Charsets.UTF_8).use { it.readText() }
 
     fun search(query: String, limit: Int = 6): List<Masla> = ensureLoaded()?.search(query, limit).orEmpty()
+
+    /** Only the masail that clearly answer the query (for offline answers). */
+    fun searchRelevant(query: String, max: Int = 3): List<Masla> = ensureLoaded()?.searchRelevant(query, max).orEmpty()
 
     fun masla(number: Int): Masla? = ensureLoaded()?.masla(number)
 

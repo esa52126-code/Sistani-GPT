@@ -3,7 +3,8 @@ package com.example.data
 import kotlin.math.ln
 
 /** One masla (ruling) of Tauzih ul Masail as printed in the book. */
-data class Masla(val number: Int, val page: Int, val text: String)
+/** [heading] is the book's section heading above the masla (may be empty). */
+data class Masla(val number: Int, val page: Int, val text: String, val heading: String = "")
 
 /**
  * Offline full-text search over the complete text of Tauzih ul Masail.
@@ -31,9 +32,11 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
         val leads = ArrayList<Set<String>>(masail.size)
         masail.forEachIndexed { i, m ->
             val counts = HashMap<String, Int>()
-            val terms = indexTerms(m.text)
+            val headingTerms = indexTerms(m.heading)
+            // Section headings name the topic ("وضو کا طریقہ"), so they count double.
+            val terms = indexTerms(m.text) + headingTerms + headingTerms
             docLen[i] = terms.size
-            leads.add(terms.take(LEAD_TERMS).toHashSet())
+            leads.add((terms.take(LEAD_TERMS) + headingTerms).toHashSet())
             for (t in terms) counts[t] = (counts[t] ?: 0) + 1
             for ((t, c) in counts) {
                 tmpDocs.getOrPut(t) { mutableListOf() }.add(i)
@@ -53,45 +56,113 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
 
     fun masailOnPage(page: Int): List<Masla> = byPage[page].orEmpty()
 
-    /**
-     * Finds the masail that best match [query]. An explicit masla number in the
-     * query ("masla 1581", "مسئلہ ۱۵۸۱") is always returned first.
-     */
-    fun search(query: String, limit: Int = 6): List<Masla> {
-        val results = LinkedHashMap<Int, Masla>()
-        explicitMaslaNumbers(query).forEach { n -> byNumber[n]?.let { results[n] = it } }
+    /** A ranked search result. [matched] of the [queryTermCount] query terms occur in the masla. */
+    data class Hit(val masla: Masla, val score: Double, val matched: Int, val queryTermCount: Int, val explicit: Boolean)
 
+    /**
+     * Finds the masail that best match [query] (broad list, used as context for the AI).
+     * An explicit masla number in the query ("masla 1581", "مسئلہ ۱۵۸۱") is always returned first.
+     */
+    fun search(query: String, limit: Int = 6): List<Masla> = rank(query, limit).map { it.masla }
+
+    /**
+     * Only the masail that really answer [query]: the best match, plus others only when they
+     * score almost as well and contain as many of the query terms. Used for offline answers,
+     * so that unrelated masail are not shown next to the right one.
+     */
+    fun searchRelevant(query: String, max: Int = 3): List<Masla> {
+        val hits = rank(query, max * 3)
+        if (hits.isEmpty()) return emptyList()
+        val explicit = hits.filter { it.explicit }
+        if (explicit.isNotEmpty()) return explicit.take(max).map { it.masla }
+        val top = hits.first()
+        // A single matched word out of several is too weak to be trusted.
+        if (top.queryTermCount >= 3 && top.matched < 2) return emptyList()
+        return hits.filter { it === top || (it.score >= top.score * RELEVANCE_RATIO && it.matched >= top.matched) }
+            .take(max).map { it.masla }
+    }
+
+    private fun rank(query: String, limit: Int): List<Hit> {
+        val results = LinkedHashMap<Int, Hit>()
+        explicitMaslaNumbers(query).forEach { n ->
+            byNumber[n]?.let { results[n] = Hit(it, Double.MAX_VALUE, 0, 0, true) }
+        }
         val terms = queryTerms(query)
-        if (terms.isNotEmpty()) {
-            val n = masail.size.toDouble()
-            val scores = DoubleArray(masail.size)
-            val matched = IntArray(masail.size)
-            for (t in terms) {
-                val docs = postings[t] ?: continue
-                val tfs = postingTf.getValue(t)
-                val idf = ln(1.0 + (n - docs.size + 0.5) / (docs.size + 0.5))
-                for (j in docs.indices) {
-                    val d = docs[j]
-                    val tf = tfs[j].toDouble()
-                    val norm = tf * (K1 + 1) / (tf + K1 * (1 - B + B * docLen[d] / avgLen))
-                    scores[d] += idf * norm
-                    if (t in leadTerms[d]) scores[d] += idf * LEAD_BONUS
-                    matched[d]++
+        if (terms.isEmpty()) return results.values.take(limit)
+
+        val n = masail.size.toDouble()
+        val scores = DoubleArray(masail.size)
+        val matched = IntArray(masail.size)
+        for (t in terms) {
+            val docs = postings[t] ?: continue
+            val tfs = postingTf.getValue(t)
+            val idf = ln(1.0 + (n - docs.size + 0.5) / (docs.size + 0.5))
+            for (j in docs.indices) {
+                val d = docs[j]
+                val tf = tfs[j].toDouble()
+                val norm = tf * (K1 + 1) / (tf + K1 * (1 - B + B * docLen[d] / avgLen))
+                scores[d] += idf * norm
+                if (t in leadTerms[d]) scores[d] += idf * LEAD_BONUS
+                matched[d]++
+            }
+        }
+        val wantsList = isListQuestion(query)
+        for (d in scores.indices) {
+            if (scores[d] <= 0) continue
+            // Reward masail that contain more of the distinct query terms.
+            if (matched[d] > 1) scores[d] *= 1.0 + 0.6 * (matched[d] - 1)
+            if (wantsList && isEnumeration(masail[d].text)) scores[d] *= 1.6
+        }
+        // Reward masail where the query words stand close together (same sentence).
+        val candidates = scores.indices.filter { scores[it] > 0 }.sortedByDescending { scores[it] }.take(80)
+        if (terms.size > 1) {
+            for (d in candidates) {
+                if (matched[d] < 2) continue
+                val span = minOf(
+                    closestSpan(indexTerms(masail[d].text), terms.toSet()),
+                    closestSpan(indexTerms(masail[d].heading + " " + masail[d].text.take(200)), terms.toSet())
+                )
+                scores[d] *= when {
+                    span <= 6 -> 1.6
+                    span <= 12 -> 1.35
+                    span <= 25 -> 1.15
+                    else -> 1.0
                 }
             }
-            // Reward masail that contain more of the distinct query terms.
-            val wantsList = isListQuestion(query)
-            for (d in scores.indices) {
-                if (matched[d] > 1) scores[d] *= 1.0 + 0.6 * (matched[d] - 1)
-                if (wantsList && scores[d] > 0 && isEnumeration(masail[d].text)) scores[d] *= 1.6
-            }
-            scores.indices
-                .filter { scores[it] > 0 }
-                .sortedByDescending { scores[it] }
-                .take(limit * 2)
-                .forEach { d -> masail[d].let { results.putIfAbsent(it.number, it) } }
+        }
+        candidates.sortedByDescending { scores[it] }.take(limit * 2).forEach { d ->
+            results.putIfAbsent(masail[d].number, Hit(masail[d], scores[d], matched[d], terms.size, false))
         }
         return results.values.take(limit)
+    }
+
+    /** Length of the shortest run of tokens that contains every query term present in [tokens]. */
+    private fun closestSpan(tokens: List<String>, terms: Set<String>): Int {
+        val present = terms.filter { it in tokens }.toSet()
+        if (present.size < 2) return Int.MAX_VALUE
+        val count = HashMap<String, Int>()
+        var have = 0
+        var best = Int.MAX_VALUE
+        var left = 0
+        for (right in tokens.indices) {
+            val t = tokens[right]
+            if (t in present) {
+                val c = (count[t] ?: 0) + 1
+                count[t] = c
+                if (c == 1) have++
+            }
+            while (have == present.size) {
+                best = minOf(best, right - left + 1)
+                val lt = tokens[left]
+                if (lt in present) {
+                    val c = count.getValue(lt) - 1
+                    count[lt] = c
+                    if (c == 0) have--
+                }
+                left++
+            }
+        }
+        return best
     }
 
     companion object {
@@ -99,6 +170,7 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
         private const val B = 0.3
         private const val LEAD_TERMS = 12
         private const val LEAD_BONUS = 0.8
+        private const val RELEVANCE_RATIO = 0.85
 
         private val MARKS = Regex("[\\u064B-\\u065F\\u0670\\u06D6-\\u06ED\\u0640\\u200C\\u200D\\u200E\\u200F]")
         private val TOKEN = Regex("[\\p{L}\\p{N}]+")
@@ -122,7 +194,7 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
             "about", "for", "and", "it", "does", "do", "can", "my", "i", "masla", "masail", "mas'ala",
             "page", "safha", "number", "no", "rule", "ruling", "hukm", "hukum", "batain", "batayen",
             "bataen", "btao", "batao", "please", "plz", "sistani", "agha", "ayatollah", "kaisa", "kaise",
-            "kesy", "kese", "kab", "kitna", "kitni", "kitne", "nahi", "nahin", "is", "are", "be", "with"
+            "kesy", "kese", "kab", "nahi", "nahin", "is", "are", "be", "with"
         )
 
         /** Roman Urdu / English keyword -> Urdu terms as spelt in the book. */
@@ -264,6 +336,16 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
             put("ghubar", "ghubaar", urdu = "غبار")
             put("jhoot", "jhoot", "lie", "lying", urdu = "جھوٹ")
             put("chand", "moon", urdu = "چاند")
+            put("seegha", "sigha", "seeghah", "seegah", "formula", urdu = "صیغہ")
+            put("kilometer", "kilometers", "km", "kilometre", "mile", "miles", "distance", "farsakh", urdu = "فرسخ")
+            put("teesri", "tisri", "third", urdu = "تیسری")
+            put("chothi", "chauthi", "fourth", urdu = "چوتھی")
+            put("doosri", "dusri", "second", urdu = "دوسری")
+            put("pehli", "pahli", "first", urdu = "پہلی")
+            put("kitna", "kitni", "kitne", "how much", urdu = "مقدار")
+            put("ghair", "gair", urdu = "غیر")
+            put("mahram", "mehram", "muharram", urdu = "محرم")
+            put("pardah", "parda", "hijab", urdu = "پردہ")
         }
 
         private val URDU_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
@@ -334,7 +416,7 @@ class BookIndex(val masail: List<Masla>, val pages: List<String>) {
         }
 
         private val LIST_QUESTION = Regex(
-            "(^|\\s)(کن|کون|کونسی|کونسے|کیا کیا|kin|kon|konsi|konse|kaunsi|which|what|kya kya|kia kia)(\\s|$)"
+            "(^|\\s)(کن|کون|کونسی|کونسے|کیا کیا|کیسے|طریقہ|طریقے|kin|kon|konsi|konse|kaunsi|which|what|kya kya|kia kia|kaise|kese|kaisay|kesay|tareeqa|tarika|tariqa|how|method)(\\s|$)"
         )
         private val ENUMERATION = Regex("((^|\\s)[۱1]\\s*۔.*\\s[۲2]\\s*۔)|(اول\\).*دوم\\))")
 

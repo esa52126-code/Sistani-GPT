@@ -202,9 +202,11 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
     }
 
     /** Offline answer: the best matching masail quoted straight from the book. */
-    private fun offlineAnswer(query: String, language: AppLanguage, hits: List<Masla>): AiResponse {
-        if (hits.isEmpty() || isGreeting(query.lowercase().trim())) return getOfflineFallback(query, language)
-        val top = hits.take(3)
+    private fun offlineAnswer(query: String, language: AppLanguage, @Suppress("UNUSED_PARAMETER") hits: List<Masla>): AiResponse {
+        if (isGreeting(query.lowercase().trim())) return getOfflineFallback(query, language)
+        // Only masail that clearly match; unrelated ones are left out.
+        val top = try { BookRepository.searchRelevant(query, 3) } catch (e: Exception) { emptyList() }
+        if (top.isEmpty()) return notFoundAnswer(language)
         val header = when (language) {
             AppLanguage.URDU -> "کتاب توضیح المسائل میں سے آپ کے سوال سے متعلق مسائل (آف لائن):"
             AppLanguage.ENGLISH -> "Related masail from Tauzih ul Masail (offline; book text is in Urdu):"
@@ -234,6 +236,18 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
             referencedPages = top.map { it.page }.distinct(),
             referencedMasail = top.map { it.number }
         )
+    }
+
+    /** Shown offline when no masla matches the question clearly enough. */
+    private fun notFoundAnswer(language: AppLanguage): AiResponse {
+        val text = when (language) {
+            AppLanguage.URDU -> "معذرت، آف لائن تلاش میں اس سوال سے واضح طور پر متعلق کوئی مسئلہ نہیں ملا۔\n\nبراہ کرم سوال میں اصل موضوع کا لفظ لکھیں، مثلاً: \"روزہ کن چیزوں سے باطل ہوتا ہے\"، \"مسافر کی نماز\"، \"غسل جنابت کا طریقہ\" یا مسئلہ نمبر لکھیں (مثلاً مسئلہ ۱۵۸۱)۔ انٹرنیٹ ہونے پر AI تفصیلی جواب دے گا۔"
+            AppLanguage.ENGLISH -> "Sorry, offline search found no masla that clearly matches this question.\n\nPlease include the main topic word, e.g. \"what breaks the fast\", \"traveller's prayer\", \"method of ghusl\", or a masla number (e.g. masla 1581). With internet, the AI gives a detailed answer."
+            AppLanguage.ROMAN_URDU -> "Maazrat, offline search me is sawal se wazeh taur par mutalliq koi masla nahi mila.\n\nSawal me asal mauzu ka lafz likhein, maslan: \"roza kin cheezon se toot jata hai\", \"musafir ki namaz\", \"ghusl janabat ka tareeqa\" ya masla number likhein (maslan masla 1581). Internet hone par AI tafseeli jawab dega."
+            AppLanguage.FARSI -> "متأسفانه در جستجوی آفلاین مسئله‌ای که به‌روشنی با این سؤال مرتبط باشد پیدا نشد. لطفاً کلمه اصلی موضوع یا شماره مسئله را بنویسید."
+            AppLanguage.ARABIC -> "عذراً، لم يُعثر في البحث دون اتصال على مسألة مرتبطة بوضوح بهذا السؤال. يرجى كتابة الكلمة الأساسية للموضوع أو رقم المسألة."
+        }
+        return AiResponse(text = text, referencedPages = emptyList(), referencedMasail = emptyList())
     }
 
     private fun isGreeting(q: String): Boolean =
