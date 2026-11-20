@@ -144,12 +144,7 @@ fun ChapterCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = when (language) {
-                        AppLanguage.ENGLISH -> chapter.titleEnglish
-                        AppLanguage.FARSI -> chapter.titleFarsi
-                        AppLanguage.ARABIC -> chapter.titleArabic
-                        else -> chapter.titleUrdu
-                    },
+                    text = chapter.titleUrdu,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,

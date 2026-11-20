@@ -30,10 +30,7 @@ object GeminiService {
     private fun getSystemInstruction(language: AppLanguage): String {
         val langSpecific = when (language) {
             AppLanguage.URDU -> "جواب لازمی سلیس اور باوقار اردو زبان میں تحریر کریں۔ ہر جواب کے آغاز میں یا آخر میں واضح طور پر 'مسئلہ نمبر' اور 'صفحہ نمبر' درج کریں۔"
-            AppLanguage.ENGLISH -> "Provide the answer strictly in clear English. Clearly mention the Masla Number and Page Number from Tauzih ul Masail."
             AppLanguage.ROMAN_URDU -> "Jawab Roman Urdu (English alphabet me Urdu) me dein. Wazeh taur par Masla Number aur Page Number lazmi darj karein."
-            AppLanguage.FARSI -> "پاسخ را به زبان فصیح فارسی ارائه دهید و شماره مسئله و شماره صفحه را دقیقا مشخص کنید."
-            AppLanguage.ARABIC -> "قدم الإجابة باللغة العربية الفصحى مع ذكر رقم المسألة ورقم الصفحة من توضيح المسائل بدقة."
         }
 
         return """
@@ -218,29 +215,15 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
             AppLanguage.ROMAN_URDU ->
                 "Masla ${m.number} (Page ${m.page})\n\n${RomanUrdu.transliterate(m.text)}\n\n" +
                     "(Offline: kitab ka text Roman huroof me badla gaya hai. Internet hone par AI behtar jawab dega.)"
-            AppLanguage.ENGLISH ->
-                "Masla ${m.number} (Page ${m.page})\n\n${m.text}\n\n" +
-                    "(Offline: the book text is in Urdu. An English answer needs an internet connection.)"
-            AppLanguage.FARSI ->
-                "مسئله ${m.number} (صفحه ${m.page})\n\n${m.text}\n\n" +
-                    "(آفلاین: متن کتاب به زبان اردو است. برای پاسخ به فارسی اتصال به اینترنت لازم است.)"
-            AppLanguage.ARABIC ->
-                "المسألة ${m.number} (صفحة ${m.page})\n\n${m.text}\n\n" +
-                    "(دون اتصال: نص الكتاب باللغة الأردية. للإجابة بالعربية يلزم الاتصال بالإنترنت.)"
         }
-        // English offline answers carry Urdu book text, so show them right-to-left.
-        val displayLanguage = if (language == AppLanguage.ENGLISH) AppLanguage.URDU else language
-        return AiResponse(text = text, referencedPages = listOf(m.page), referencedMasail = listOf(m.number), language = displayLanguage)
+        return AiResponse(text = text, referencedPages = listOf(m.page), referencedMasail = listOf(m.number), language = language)
     }
 
     /** Shown offline when no masla matches the question clearly enough. */
     private fun notFoundAnswer(language: AppLanguage): AiResponse {
         val text = when (language) {
             AppLanguage.URDU -> "معذرت، آف لائن تلاش میں اس سوال سے واضح طور پر متعلق کوئی مسئلہ نہیں ملا۔\n\nبراہ کرم سوال میں اصل موضوع کا لفظ لکھیں، مثلاً: \"روزہ کن چیزوں سے باطل ہوتا ہے\"، \"مسافر کی نماز\"، \"غسل جنابت کا طریقہ\" یا مسئلہ نمبر لکھیں (مثلاً مسئلہ ۱۵۸۱)۔ انٹرنیٹ ہونے پر AI تفصیلی جواب دے گا۔"
-            AppLanguage.ENGLISH -> "Sorry, offline search found no masla that clearly matches this question.\n\nPlease include the main topic word, e.g. \"what breaks the fast\", \"traveller's prayer\", \"method of ghusl\", or a masla number (e.g. masla 1581). With internet, the AI gives a detailed answer."
             AppLanguage.ROMAN_URDU -> "Maazrat, offline search me is sawal se wazeh taur par mutalliq koi masla nahi mila.\n\nSawal me asal mauzu ka lafz likhein, maslan: \"roza kin cheezon se toot jata hai\", \"musafir ki namaz\", \"ghusl janabat ka tareeqa\" ya masla number likhein (maslan masla 1581). Internet hone par AI tafseeli jawab dega."
-            AppLanguage.FARSI -> "متأسفانه در جستجوی آفلاین مسئله‌ای که به‌روشنی با این سؤال مرتبط باشد پیدا نشد. لطفاً کلمه اصلی موضوع یا شماره مسئله را بنویسید."
-            AppLanguage.ARABIC -> "عذراً، لم يُعثر في البحث دون اتصال على مسألة مرتبطة بوضوح بهذا السؤال. يرجى كتابة الكلمة الأساسية للموضوع أو رقم المسألة."
         }
         return AiResponse(text = text, referencedPages = emptyList(), referencedMasail = emptyList(), language = language)
     }
@@ -342,7 +325,6 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
 
 براہ کرم اپنا مطلوبہ سوال تحریر فرمائیں!
                 """.trimIndent()
-                AppLanguage.ENGLISH -> """
 Wa Alaikum Assalam wa Rahmatullah!
 I am your AI Jurisprudence Assistant for Ayatollah Sayyid Ali al-Husayni al-Sistani's "Tauzih ul Masail" (542 Pages).
 
@@ -354,11 +336,9 @@ Main Ayatollah Sayyid Ali al-Husayni al-Sistani ki kitab 'Tauzih ul Masail' ka F
 
 Aap poori kitab (542 pages) me se koi bhi sawal pooch sakte hain. Har jawab me exact Masla Number aur Page Number ka direct link milega. Apna sawal likhein!
                 """.trimIndent()
-                AppLanguage.FARSI -> """
 و علیکم السلام و رحمة الله!
 من دستیار هوشمند فقهی کتاب «توضیح المسائل» حضرت آیت الله العظمی سیستانی هستم. لطفاً سوال شرعی خود را مطرح فرمایید تا همراه با شماره مسئله و صفحه پاسخ داده شود.
                 """.trimIndent()
-                AppLanguage.ARABIC -> """
 وعليكم السلام ورحمة الله وبركاته!
 أهلاً بكم في المساعد الفقهي لكتاب «توضيح المسائل» لسماحة آية الله العظمى السيد علي الحسيني السيستاني (دام ظله). تفضلوا بطرح مسألتكم الشرعية.
                 """.trimIndent()
@@ -435,7 +415,6 @@ ${matchingChapter.description}
 (مکمل صفحہ اور متعلقہ مسائل کو براہِ راست پڑھنے، ڈاؤنلوڈ یا شیئر کرنے کے لئے نیچے دیئے گئے بٹن پر کلک کریں)
             """.trimIndent()
 
-            AppLanguage.ENGLISH -> """
 According to the official rulings of Ayatollah Sayyid Ali al-Husayni al-Sistani (Tauzih ul Masail):
 
 Chapter: ${matchingChapter.titleEnglish} (${matchingChapter.titleUrdu})
@@ -464,7 +443,6 @@ ${matchingChapter.description}
 (Direct ye page dekhne, parhne aur download karne ke liye niche diye gaye button par click karein)
             """.trimIndent()
 
-            AppLanguage.FARSI -> """
 مطابق با فتاوای حضرت آیت الله العظمی سید علی حسینی سیستانی در کتاب «توضیح المسائل»:
 
 باب: ${matchingChapter.titleFarsi}
@@ -477,7 +455,6 @@ ${matchingChapter.description}
 (جهت مطالعه مستقیم، دانلود یا اشتراک‌گذاری متن این صفحه بر روی دکمه زیر کلیک فرمایید)
             """.trimIndent()
 
-            AppLanguage.ARABIC -> """
 وفقاً لفتاوى سماحة المرجع الديني الأعلى آية الله العظمى السيد علي الحسيني السيستاني (دام ظله) في «توضيح المسائل»:
 
 الباب: ${matchingChapter.titleArabic}
