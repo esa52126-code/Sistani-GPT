@@ -27,6 +27,7 @@ import com.example.ui.screens.BookmarksScreen
 import com.example.ui.screens.ChatScreen
 import com.example.ui.screens.TopicsScreen
 import com.example.ui.theme.MyApplicationTheme
+import com.example.data.BookRepository
 import java.util.UUID
 
 enum class AppScreen(val titleUrdu: String, val titleEnglish: String, val icon: ImageVector) {
@@ -39,6 +40,9 @@ enum class AppScreen(val titleUrdu: String, val titleEnglish: String, val icon: 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Load the bundled book text in the background so search and reading work offline
+        BookRepository.init(applicationContext)
+        Thread { BookRepository.ensureLoaded() }.start()
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
