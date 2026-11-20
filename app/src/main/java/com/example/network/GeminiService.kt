@@ -325,22 +325,11 @@ BOOK TEXT PROVIDED WITH EACH QUESTION:
 
 براہ کرم اپنا مطلوبہ سوال تحریر فرمائیں!
                 """.trimIndent()
-Wa Alaikum Assalam wa Rahmatullah!
-I am your AI Jurisprudence Assistant for Ayatollah Sayyid Ali al-Husayni al-Sistani's "Tauzih ul Masail" (542 Pages).
-
-You can ask any Islamic fiqh ruling, and I will provide the answer along with exact Masla and Page references and direct book links. Please feel free to ask your question!
-                """.trimIndent()
                 AppLanguage.ROMAN_URDU -> """
 Wa Alaikum Assalam wa Rahmatullah!
 Main Ayatollah Sayyid Ali al-Husayni al-Sistani ki kitab 'Tauzih ul Masail' ka Fiqhi Assistant hoon.
 
 Aap poori kitab (542 pages) me se koi bhi sawal pooch sakte hain. Har jawab me exact Masla Number aur Page Number ka direct link milega. Apna sawal likhein!
-                """.trimIndent()
-و علیکم السلام و رحمة الله!
-من دستیار هوشمند فقهی کتاب «توضیح المسائل» حضرت آیت الله العظمی سیستانی هستم. لطفاً سوال شرعی خود را مطرح فرمایید تا همراه با شماره مسئله و صفحه پاسخ داده شود.
-                """.trimIndent()
-وعليكم السلام ورحمة الله وبركاته!
-أهلاً بكم في المساعد الفقهي لكتاب «توضيح المسائل» لسماحة آية الله العظمى السيد علي الحسيني السيستاني (دام ظله). تفضلوا بطرح مسألتكم الشرعية.
                 """.trimIndent()
             }
             return AiResponse(text = greetText, referencedPages = listOf(16), referencedMasail = listOf(1))
@@ -415,21 +404,6 @@ ${matchingChapter.description}
 (مکمل صفحہ اور متعلقہ مسائل کو براہِ راست پڑھنے، ڈاؤنلوڈ یا شیئر کرنے کے لئے نیچے دیئے گئے بٹن پر کلک کریں)
             """.trimIndent()
 
-According to the official rulings of Ayatollah Sayyid Ali al-Husayni al-Sistani (Tauzih ul Masail):
-
-Chapter: ${matchingChapter.titleEnglish} (${matchingChapter.titleUrdu})
-Masla Number Reference: Masla $targetMasla (Range: Masail ${matchingChapter.maslaStart} to ${matchingChapter.maslaEnd})
-Book Page: Page $targetPageNum (of 542)
-
-Summary of Ruling:
-${matchingChapter.description}
-
-Reference Excerpt:
-"${samplePage.contentUrdu.take(280)}..."
-
-(Click the button below to directly open, view or download this page in the book reader)
-            """.trimIndent()
-
             AppLanguage.ROMAN_URDU -> """
 Ayatollah Sayyid Ali al-Husayni al-Sistani ki Tauzih ul Masail ke mutabiq:
 
@@ -443,29 +417,6 @@ ${matchingChapter.description}
 (Direct ye page dekhne, parhne aur download karne ke liye niche diye gaye button par click karein)
             """.trimIndent()
 
-مطابق با فتاوای حضرت آیت الله العظمی سید علی حسینی سیستانی در کتاب «توضیح المسائل»:
-
-باب: ${matchingChapter.titleFarsi}
-شماره مسأله: مسأله $targetMasla (از مسأله ${matchingChapter.maslaStart} تا ${matchingChapter.maslaEnd})
-شماره صفحه: صفحه $targetPageNum (از کل ۵۴۲ صفحه)
-
-خلاصه احکام:
-${matchingChapter.description}
-
-(جهت مطالعه مستقیم، دانلود یا اشتراک‌گذاری متن این صفحه بر روی دکمه زیر کلیک فرمایید)
-            """.trimIndent()
-
-وفقاً لفتاوى سماحة المرجع الديني الأعلى آية الله العظمى السيد علي الحسيني السيستاني (دام ظله) في «توضيح المسائل»:
-
-الباب: ${matchingChapter.titleArabic}
-رقم المسألة: المسألة $targetMasla (نطاق المسائل ${matchingChapter.maslaStart} إلى ${matchingChapter.maslaEnd})
-رقم الصفحة: صفحة $targetPageNum (من ۵۴۲ صفحة)
-
-خلاصة الحكم الشرعي:
-${matchingChapter.description}
-
-(لمطالعة وتحميل الصفحة مباشرة من الكتاب، يرجى الضغط على الزر أدناه)
-            """.trimIndent()
         }
 
         return AiResponse(
