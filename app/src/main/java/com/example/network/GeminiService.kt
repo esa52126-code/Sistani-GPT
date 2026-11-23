@@ -115,12 +115,29 @@ BOOK STRUCTURAL FACTS & PAGE GUIDE:
                 val raw = answerFromPages(context, apiKey, model, query, language, conversationHistory, pages)
                 Result.success(parseResponse(context, raw, pages))
             } catch (e: ApiException) {
-                Result.success(offlineAnswer(context, query, language, chapter, maslaAsked, emptyList(), "⚠️ " + e.userMessage))
+                Result.success(offlineAnswer(context, query, language, chapter, maslaAsked, emptyList(), "⚠️ AI جواب نہیں دے سکا:\n" + e.userMessage + "\n\n(🔑 بٹن میں «Key ٹیسٹ کریں» سے مسئلہ چیک کریں)"))
             } catch (e: IOException) {
                 Result.success(offlineAnswer(context, query, language, chapter, maslaAsked, emptyList(), "⚠️ " + networkError(language)))
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    /** Quick check that the key + model work. Returns a user-facing message. */
+    suspend fun testKey(apiKey: String, model: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext false to "پہلے API key درج کریں۔"
+        try {
+            val body = JSONObject().put("contents", JSONArray().put(
+                JSONObject().put("role", "user").put("parts", JSONArray().put(textPart("Reply with the single word OK")))))
+            post(apiKey.trim(), model.ifBlank { SettingsStore.DEFAULT_MODEL }.trim(), body)
+            true to "✅ Key درست ہے اور ماڈل کام کر رہا ہے۔"
+        } catch (e: ApiException) {
+            false to "❌ " + e.userMessage
+        } catch (e: IOException) {
+            false to "❌ انٹرنیٹ سے رابطہ نہیں ہو سکا: ${e.message}"
+        } catch (e: Exception) {
+            false to "❌ خرابی: ${e.message}"
         }
     }
 
@@ -348,15 +365,27 @@ $BOOK_GUIDE
                 else "کوئی مطابقت رکھنے والا صفحہ نہیں ملا۔ کتاب کے الفاظ (مثلاً روزہ، وضو، نماز) میں سوال لکھیں یا ابواب والے حصے سے دیکھیں۔"
             )
         }
-        chapter?.let { sb.append("باب: ${it.titleUrdu} (صفحات ${it.pageStart}–${it.pageEnd})\n\n") }
+        if (pages.isNotEmpty()) {
+            sb.append(
+                if (language == AppLanguage.ENGLISH || language == AppLanguage.ROMAN_URDU)
+                    "Your answer is most likely on these pages of the book:\n\n"
+                else "آپ کے سوال کا جواب غالباً کتاب کے ان صفحات پر ہے:\n\n"
+            )
+        }
         pages.take(3).forEach { p ->
             val range = BookRepository.masailOnPage(context, p)
-            sb.append("• صفحہ $p")
-            if (range != null) sb.append("  (مسائل تقریباً ${range.first}–${range.last})")
-            sb.append("\n")
-            val snip = BookRepository.snippet(context, p, query, keywords)
-            if (snip.isNotBlank()) sb.append("  «$snip»\n")
-            sb.append("\n")
+            val ch = TauzihDatabase.findChapterForPage(p)
+            sb.append("📄 صفحہ $p")
+            if (ch != null) sb.append(" — ${ch.titleUrdu}")
+            if (range != null) sb.append("\n     (مسائل تقریباً ${range.first} تا ${range.last})")
+            sb.append("\n\n")
+        }
+        if (pages.isNotEmpty()) {
+            sb.append(
+                if (language == AppLanguage.ENGLISH || language == AppLanguage.ROMAN_URDU)
+                    "Tap a page button below to read the original page."
+                else "اصل صفحہ پڑھنے کے لئے نیچے صفحہ والے بٹن پر کلک کریں۔"
+            )
         }
         return AiResponse(
             text = sb.toString().trim(),

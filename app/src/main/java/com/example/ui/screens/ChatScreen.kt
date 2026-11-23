@@ -916,6 +916,9 @@ fun ApiKeyDialog(onDismiss: () -> Unit, onSaved: (Boolean) -> Unit) {
     val context = LocalContext.current
     var key by remember { mutableStateOf(SettingsStore.savedApiKey(context)) }
     var model by remember { mutableStateOf(SettingsStore.model(context)) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var testing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("🔑 Gemini API Key", fontWeight = FontWeight.Bold) },
@@ -953,6 +956,26 @@ fun ApiKeyDialog(onDismiss: () -> Unit, onSaved: (Boolean) -> Unit) {
                     supportingText = { Text("ڈیفالٹ: ${SettingsStore.DEFAULT_MODEL}", fontSize = 11.sp) },
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    enabled = !testing,
+                    onClick = {
+                        testing = true
+                        testResult = null
+                        scope.launch {
+                            testResult = GeminiService.testKey(key, model).second
+                            testing = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (testing) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Text("Key ٹیسٹ کریں")
+                }
+                testResult?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Right, modifier = Modifier.fillMaxWidth())
+                }
             }
         },
         confirmButton = {
