@@ -46,7 +46,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.AppLanguage
 import com.example.data.ChatMessage
+import com.example.data.SettingsStore
 import com.example.network.GeminiService
+import android.content.ActivityNotFoundException
+import android.net.Uri
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import kotlinx.coroutines.launch
 import java.util.*
 
@@ -106,7 +110,9 @@ fun ChatScreen(
 
     var inputText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    var isOfflineMode by remember { mutableStateOf(true) } // Default to reliable 100% offline mode
+    var hasApiKey by remember { mutableStateOf(SettingsStore.hasApiKey(context)) }
+    var isOfflineMode by remember { mutableStateOf(!SettingsStore.hasApiKey(context)) }
+    var showSettings by remember { mutableStateOf(!SettingsStore.hasApiKey(context)) }
 
     // Selected message for full reading view
     var fullViewMessage by remember { mutableStateOf<ChatMessage?>(null) }
@@ -237,7 +243,7 @@ fun ChatScreen(
 
         coroutineScope.launch {
             listState.animateScrollToItem(messages.size - 1)
-            val result = GeminiService.askTauzihAi(userMsg.text, currentLanguage, priorHistory)
+            val result = GeminiService.askTauzihAi(context, userMsg.text, currentLanguage, priorHistory, offlineMode = isOfflineMode)
             result.onSuccess { aiResp ->
                 val botMsg = ChatMessage(
                     id = UUID.randomUUID().toString(),
@@ -254,7 +260,7 @@ fun ChatScreen(
             }.onFailure {
                 val errorMsg = ChatMessage(
                     id = UUID.randomUUID().toString(),
-                    text = "معذرت، رابطہ میں دشواری پیش آئی۔ براہ کرم دوبارہ کوشش کریں۔",
+                    text = "معذرت، خرابی پیش آئی: ${it.message ?: ""}۔ براہ کرم دوبارہ کوشش کریں۔",
                     isUser = false,
                     language = currentLanguage
                 )
@@ -359,6 +365,22 @@ fun ChatScreen(
         )
     }
 
+    if (showSettings) {
+        ApiKeyDialog(
+            onDismiss = { showSettings = false },
+            onSaved = { saved ->
+                hasApiKey = saved
+                isOfflineMode = !saved
+                showSettings = false
+                Toast.makeText(
+                    context,
+                    if (saved) "API key محفوظ ہو گئی — آن لائن موڈ فعال" else "API key ہٹا دی گئی — آف لائن موڈ",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -395,7 +417,7 @@ fun ChatScreen(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = if (isOfflineMode) "100% آف لائن موڈ فعال" else "آن لائن موڈ",
+                                    text = if (isOfflineMode) "آف لائن: کتاب میں تلاش" else "آن لائن: AI کتاب کے صفحات سے",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
                                 )
@@ -412,6 +434,10 @@ fun ChatScreen(
                     // Offline / Online toggle button
                     FilledTonalButton(
                         onClick = {
+                            if (isOfflineMode && !hasApiKey) {
+                                showSettings = true
+                                return@FilledTonalButton
+                            }
                             isOfflineMode = !isOfflineMode
                             val modeMsg = if (isOfflineMode) "آف لائن موڈ منتخب کیا گیا (انٹرنیٹ کے بغیر فعال)" else "آن لائن موڈ منتخب کیا گیا"
                             Toast.makeText(context, modeMsg, Toast.LENGTH_SHORT).show()
@@ -432,6 +458,9 @@ fun ChatScreen(
                         Text(if (isOfflineMode) "آف لائن" else "آن لائن", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
 
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(Icons.Default.Key, contentDescription = "API key settings")
+                    }
                     IconButton(onClick = {
                         messages = listOf(welcomeMessage)
                         Toast.makeText(context, "چیٹ صاف کر دی گئی", Toast.LENGTH_SHORT).show()
@@ -879,4 +908,61 @@ fun ChatBubble(
             }
         }
     }
+}
+
+
+@Composable
+fun ApiKeyDialog(onDismiss: () -> Unit, onSaved: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    var key by remember { mutableStateOf(SettingsStore.savedApiKey(context)) }
+    var model by remember { mutableStateOf(SettingsStore.model(context)) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("🔑 Gemini API Key", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "AI جواب کتاب کے اصل صفحات پڑھ کر دیتا ہے۔ اس کے لئے اپنی مفت Gemini API key درج کریں۔ " +
+                        "key صرف آپ کے فون میں محفوظ رہتی ہے۔\n\n" +
+                        "Key بنانے کا طریقہ: aistudio.google.com/apikey کھولیں → Create API key → کاپی کر کے یہاں پیسٹ کریں۔",
+                    fontSize = 13.sp,
+                    lineHeight = 22.sp,
+                    textAlign = TextAlign.Right,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
+                TextButton(onClick = {
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
+                    } catch (_: ActivityNotFoundException) {}
+                }) { Text("aistudio.google.com/apikey کھولیں") }
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = { key = it.trim() },
+                    label = { Text("API key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = { model = it.trim() },
+                    label = { Text("Model") },
+                    singleLine = true,
+                    supportingText = { Text("ڈیفالٹ: ${SettingsStore.DEFAULT_MODEL}", fontSize = 11.sp) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                SettingsStore.save(context, key, model.ifBlank { SettingsStore.DEFAULT_MODEL })
+                onSaved(SettingsStore.hasApiKey(context))
+            }) { Text("محفوظ کریں") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("بعد میں") }
+        }
+    )
 }

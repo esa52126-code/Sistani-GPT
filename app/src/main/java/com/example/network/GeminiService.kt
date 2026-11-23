@@ -1,7 +1,11 @@
 package com.example.network
 
-import com.example.BuildConfig
+import android.content.Context
+import android.util.Base64
 import com.example.data.AppLanguage
+import com.example.data.BookRepository
+import com.example.data.SettingsStore
+import com.example.data.TauzihChapter
 import com.example.data.TauzihDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,30 +15,26 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+/**
+ * Answers questions from the real book:
+ *  1. find candidate pages (OCR text index + chapter hints + masla number lookup)
+ *  2. send the actual page images (rendered from the bundled PDF) to Gemini
+ *  3. Gemini answers only from those pages, citing masla and page numbers.
+ * Without an API key (or in offline mode) the app shows the matching book pages instead.
+ */
 object GeminiService {
-    private const val MODEL_NAME = "gemini-3.5-flash"
-    private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent"
+    private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    private fun getSystemInstruction(language: AppLanguage): String {
-        val langSpecific = when (language) {
-            AppLanguage.URDU -> "جواب لازمی سلیس اور باوقار اردو زبان میں تحریر کریں۔ ہر جواب کے آغاز میں یا آخر میں واضح طور پر 'مسئلہ نمبر' اور 'صفحہ نمبر' درج کریں۔"
-            AppLanguage.ENGLISH -> "Provide the answer strictly in clear English. Clearly mention the Masla Number and Page Number from Tauzih ul Masail."
-            AppLanguage.ROMAN_URDU -> "Jawab Roman Urdu (English alphabet me Urdu) me dein. Wazeh taur par Masla Number aur Page Number lazmi darj karein."
-            AppLanguage.FARSI -> "پاسخ را به زبان فصیح فارسی ارائه دهید و شماره مسئله و شماره صفحه را دقیقا مشخص کنید."
-            AppLanguage.ARABIC -> "قدم الإجابة باللغة العربية الفصحى مع ذكر رقم المسألة ورقم الصفحة من توضيح المسائل بدقة."
-        }
-
-        return """
-You are the official, authoritative Islamic Fiqh Scholar AI Assistant specialized in Ayatollah Sayyid Ali al-Husayni al-Sistani's comprehensive jurisprudence book: "توضیح المسائل" (Tauzih ul Masail - Complete 542 Pages).
-
+    private val BOOK_GUIDE = """
 BOOK STRUCTURAL FACTS & PAGE GUIDE:
 - Book Total Pages: 542 Pages
 - Total Masail: 1 to 2793+
@@ -71,353 +71,347 @@ BOOK STRUCTURAL FACTS & PAGE GUIDE:
 - Nazr, Oaths, Waqf, Wasiyat: Pages 506-523, Masail 2659-2736
 - Meeras (Inheritance 3 classes & spouses): Pages 523-535, Masail 2737-2793
 - Fiqhi Glossary & Metric Weights (Mithqal, Saa, Mud, Kurr): Pages 536-542
+    """.trimIndent()
 
-MANDATORY RESPONSE FORMAT:
-1. Always state Ayatollah Sistani's exact ruling clearly and politely.
-2. YOU MUST ALWAYS INCLUDE:
-   `[MASLA: number]` (e.g. `[MASLA: 1581]`)
-   `[PAGE: number]` (e.g. `[PAGE: 298]`)
-   so that the app can generate a direct interactive link to open and download the exact page.
-3. Language instruction: $langSpecific
-4. Quote the actual words or relevant portion from the book when helpful.
-        """.trimIndent()
+    private class ApiException(val userMessage: String) : Exception(userMessage)
+
+    private fun languageInstruction(language: AppLanguage): String = when (language) {
+        AppLanguage.URDU -> "جواب سلیس اردو میں دیں۔"
+        AppLanguage.ENGLISH -> "Answer in clear English."
+        AppLanguage.ROMAN_URDU -> "Jawab Roman Urdu (English huroof mein Urdu) mein dein."
+        AppLanguage.FARSI -> "پاسخ را به زبان فارسی بدهید."
+        AppLanguage.ARABIC -> "أجب باللغة العربية الفصحى."
     }
 
     suspend fun askTauzihAi(
+        context: Context,
         userQuery: String,
         language: AppLanguage,
-        conversationHistory: List<Pair<String, Boolean>> = emptyList()
+        conversationHistory: List<Pair<String, Boolean>> = emptyList(),
+        offlineMode: Boolean = false
     ): Result<AiResponse> = withContext(Dispatchers.IO) {
-        val apiKey = BuildConfig.GEMINI_API_KEY
-
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-            // Offline intelligent fallback using local database
-            return@withContext Result.success(getOfflineFallback(userQuery, language))
-        }
-
         try {
-            val requestJson = JSONObject().apply {
-                val contentsArray = JSONArray()
+            val query = userQuery.trim()
+            val chapter = guessChapter(query)
+            val maslaAsked = explicitMasla(query)
+            val apiKey = SettingsStore.apiKey(context)
 
-                // Filter valid alternating history starting with user and ending with model
-                val validHistory = mutableListOf<Pair<String, Boolean>>()
-                var expectUser = true
-                for (item in conversationHistory) {
-                    if (item.first.isNotBlank() && item.first != userQuery) {
-                        if (item.second == expectUser) {
-                            validHistory.add(item)
-                            expectUser = !expectUser
-                        }
-                    }
-                }
-                // Ensure history ends with a model response before we append current user query
-                if (validHistory.isNotEmpty() && validHistory.last().second) {
-                    validHistory.removeAt(validHistory.size - 1)
-                }
-
-                // Add up to last 4 alternating turns
-                validHistory.takeLast(4).forEach { (msg, isUser) ->
-                    contentsArray.put(JSONObject().apply {
-                        put("role", if (isUser) "user" else "model")
-                        put("parts", JSONArray().put(JSONObject().put("text", msg)))
-                    })
-                }
-
-                // Append current user query
-                contentsArray.put(JSONObject().apply {
-                    put("role", "user")
-                    put("parts", JSONArray().put(JSONObject().put("text", userQuery)))
-                })
-
-                put("contents", contentsArray)
-
-                // System Instruction
-                put("systemInstruction", JSONObject().apply {
-                    put("parts", JSONArray().put(JSONObject().put("text", getSystemInstruction(language))))
-                })
-
-                // Generation config
-                put("generationConfig", JSONObject().apply {
-                    put("temperature", 0.3)
-                    put("topP", 0.95)
-                    put("topK", 40)
-                })
+            if (offlineMode || apiKey.isEmpty()) {
+                val note = if (apiKey.isEmpty()) noKeyNote(language) else offlineNote(language)
+                return@withContext Result.success(offlineAnswer(context, query, language, chapter, maslaAsked, emptyList(), note))
             }
 
-            val requestBody = requestJson.toString().toRequestBody("application/json".toMediaType())
-            val request = Request.Builder()
-                .url("$BASE_URL?key=$apiKey")
-                .post(requestBody)
-                .build()
+            val model = SettingsStore.model(context)
+            try {
+                // Step 1: let the AI turn the question into Urdu book keywords (handles Roman Urdu / English)
+                val kw = runCatching { extractKeywords(apiKey, model, query) }.getOrNull()
+                val keywords = kw?.first.orEmpty()
+                val masla = maslaAsked ?: kw?.second
 
-            val response = okHttpClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+                // Step 2: pick candidate pages
+                val pages = candidatePages(context, query, keywords, chapter, masla)
 
-            if (!response.isSuccessful) {
-                // Return fallback if API fails
-                return@withContext Result.success(getOfflineFallback(userQuery, language))
-            }
-
-            val rootJson = JSONObject(responseBody)
-            val candidates = rootJson.optJSONArray("candidates")
-            val firstCandidate = candidates?.optJSONObject(0)
-            val content = firstCandidate?.optJSONObject("content")
-            val parts = content?.optJSONArray("parts")
-            val text = parts?.optJSONObject(0)?.optString("text") ?: ""
-
-            if (text.isNotBlank()) {
-                val parsed = parseResponse(text, userQuery)
-                return@withContext Result.success(parsed)
-            } else {
-                return@withContext Result.success(getOfflineFallback(userQuery, language))
+                // Step 3: answer from the page images
+                val raw = answerFromPages(context, apiKey, model, query, language, conversationHistory, pages)
+                Result.success(parseResponse(context, raw, pages))
+            } catch (e: ApiException) {
+                Result.success(offlineAnswer(context, query, language, chapter, maslaAsked, emptyList(), "⚠️ " + e.userMessage))
+            } catch (e: IOException) {
+                Result.success(offlineAnswer(context, query, language, chapter, maslaAsked, emptyList(), "⚠️ " + networkError(language)))
             }
         } catch (e: Exception) {
-            return@withContext Result.success(getOfflineFallback(userQuery, language))
+            Result.failure(e)
         }
     }
 
-    private fun parseResponse(rawText: String, query: String): AiResponse {
-        val maslaRegex = Regex("\\[MASLA:\\s*(\\d+)\\]", RegexOption.IGNORE_CASE)
-        val pageRegex = Regex("\\[PAGE:\\s*(\\d+)\\]", RegexOption.IGNORE_CASE)
+    // ------------------------------------------------------------------ page selection
 
-        val masailFound = maslaRegex.findAll(rawText).mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
-        val pagesFound = pageRegex.findAll(rawText).mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
+    private fun explicitMasla(q: String): Int? {
+        val n = BookRepository.normalize(q)
+        Regex("(?:مسیلہ|مسئلہ|مسالہ|masl[ae]h?|masala|masail|issue|ruling)\\s*(?:نمبر|no\\.?|number|#)?\\s*[:#]?\\s*(\\d{1,4})", RegexOption.IGNORE_CASE)
+            .find(n)?.let { return it.groupValues[1].toIntOrNull()?.takeIf { v -> v in 1..2900 } }
+        val only = n.trim()
+        if (only.all { it.isDigit() } && only.length in 1..4) return only.toIntOrNull()
+        return null
+    }
 
-        // Also check if text contains Urdu/English numbers like "مسئلہ ۱۵۸۱" or "مسئلہ 1581" or "صفحہ 298"
-        val extraMasail = Regex("(?:مسئلہ|مسئلہ نمبر|Masla(?:\\s+No)?)\\s*[:#]?\\s*(\\d+)", RegexOption.IGNORE_CASE)
-            .findAll(rawText).mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
+    private fun explicitPage(q: String): Int? {
+        val n = BookRepository.normalize(q)
+        return Regex("(?:صفحہ|safha|page|p\\.)\\s*(?:نمبر|no\\.?|number)?\\s*[:#]?\\s*(\\d{1,3})", RegexOption.IGNORE_CASE)
+            .find(n)?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it in 1..BookRepository.TOTAL_PAGES }
+    }
 
-        val extraPages = Regex("(?:صفحہ|صفحہ نمبر|Page(?:\\s+No)?)\\s*[:#]?\\s*(\\d+)", RegexOption.IGNORE_CASE)
-            .findAll(rawText).mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
-
-        val allMasail = (masailFound + extraMasail).distinct()
-        var allPages = (pagesFound + extraPages).filter { it in 1..542 }.distinct()
-
-        // If no page found but masla found, calculate page from chapter
-        if (allPages.isEmpty() && allMasail.isNotEmpty()) {
-            val m = allMasail.first()
-            val ch = TauzihDatabase.chapters.find { m in it.maslaStart..it.maslaEnd }
-            if (ch != null) {
-                val ratio = if (ch.maslaEnd > ch.maslaStart) (m - ch.maslaStart).toFloat() / (ch.maslaEnd - ch.maslaStart) else 0f
-                val estPage = (ch.pageStart + ratio * (ch.pageEnd - ch.pageStart)).toInt().coerceIn(ch.pageStart, ch.pageEnd)
-                allPages = listOf(estPage)
+    private fun candidatePages(
+        context: Context,
+        query: String,
+        keywords: List<String>,
+        chapter: TauzihChapter?,
+        masla: Int?
+    ): List<Int> {
+        val result = LinkedHashSet<Int>()
+        explicitPage(query)?.let { result.add(it) }
+        masla?.let { m ->
+            BookRepository.pageForMasla(context, m)?.let { est ->
+                // index is approximate (±1 page): send the neighbours too
+                listOf(est, est - 1, est + 1).filter { it in 1..BookRepository.TOTAL_PAGES }.forEach { result.add(it) }
             }
         }
+        val hint = chapter?.let { it.pageStart..it.pageEnd }
+        val hits = BookRepository.search(context, query, keywords, hint, limit = 4)
+        hits.forEach { if (result.size < 4) result.add(it.page) }
+        if (result.isEmpty() && chapter != null) {
+            result.add(chapter.pageStart); result.add(chapter.pageStart + 1)
+        }
+        // The best hit's ruling may continue on the next page
+        if (result.size < 5 && hits.isNotEmpty()) {
+            val next = hits.first().page + 1
+            if (next <= BookRepository.TOTAL_PAGES) result.add(next)
+        }
+        return result.take(5)
+    }
 
-        // Clean up markdown tags for pleasant display while keeping references
-        val cleanText = rawText
-            .replace(Regex("\\[MASLA:\\s*\\d+\\]", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\[PAGE:\\s*\\d+\\]", RegexOption.IGNORE_CASE), "")
+    // ------------------------------------------------------------------ Gemini calls
+
+    private fun post(apiKey: String, model: String, body: JSONObject): String {
+        val request = Request.Builder()
+            .url("$BASE$model:generateContent")
+            .header("x-goog-api-key", apiKey)
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        okHttpClient.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val apiMsg = runCatching { JSONObject(text).getJSONObject("error").optString("message") }.getOrDefault("")
+                val msg = when (response.code) {
+                    400 -> if (apiMsg.contains("API key", true)) "API key درست نہیں ہے۔ سیٹنگز (🔑) میں صحیح key درج کریں۔" else "درخواست میں خرابی (400): $apiMsg"
+                    401, 403 -> "API key درست نہیں یا اس کی اجازت نہیں ہے۔ سیٹنگز (🔑) میں key چیک کریں۔"
+                    404 -> "ماڈل '$model' دستیاب نہیں۔ سیٹنگز میں ماڈل کا نام '${SettingsStore.DEFAULT_MODEL}' کر دیں۔"
+                    429 -> "Gemini کی مفت حد (quota) ختم ہو گئی ہے، تھوڑی دیر بعد کوشش کریں۔"
+                    in 500..599 -> "Gemini سرور مصروف ہے، دوبارہ کوشش کریں۔"
+                    else -> "خرابی ${response.code}: $apiMsg"
+                }
+                throw ApiException(msg)
+            }
+            val root = JSONObject(text)
+            val parts = root.optJSONArray("candidates")?.optJSONObject(0)
+                ?.optJSONObject("content")?.optJSONArray("parts") ?: return ""
+            val sb = StringBuilder()
+            for (i in 0 until parts.length()) {
+                val p = parts.optJSONObject(i) ?: continue
+                if (p.optBoolean("thought", false)) continue
+                sb.append(p.optString("text"))
+            }
+            return sb.toString().trim()
+        }
+    }
+
+    private fun textPart(t: String) = JSONObject().put("text", t)
+
+    /** Returns Urdu keywords for searching the book, plus a masla number if the question names one. */
+    private fun extractKeywords(apiKey: String, model: String, query: String): Pair<List<String>, Int?> {
+        val prompt = """
+You help search the Urdu book "Tauzih ul Masail" (Ayatollah Sistani). For the user's question below,
+return JSON only: {"keywords": [...], "masla": number or null}
+- keywords: 4 to 8 short Urdu words/phrases exactly as they would be written in the Urdu book text
+  (e.g. روزہ, باطل, قے, غسل جنابت, نماز قصر, مسافر, خمس), in Urdu script even if the question is Roman Urdu/English.
+- masla: only if the user explicitly asks about a specific masla number.
+
+Book guide:
+$BOOK_GUIDE
+
+Question: $query
+        """.trimIndent()
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(textPart(prompt)))))
+            .put("generationConfig", JSONObject().put("temperature", 0).put("responseMimeType", "application/json"))
+        val raw = post(apiKey, model, body)
+        val json = JSONObject(raw.substring(raw.indexOf('{').coerceAtLeast(0), raw.lastIndexOf('}') + 1))
+        val arr = json.optJSONArray("keywords") ?: JSONArray()
+        val list = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+        val m = if (json.isNull("masla")) null else json.optInt("masla", -1).takeIf { it > 0 }
+        return list to m
+    }
+
+    private fun answerFromPages(
+        context: Context,
+        apiKey: String,
+        model: String,
+        query: String,
+        language: AppLanguage,
+        history: List<Pair<String, Boolean>>,
+        pages: List<Int>
+    ): String {
+        val system = """
+You are a careful assistant for Ayatollah Sayyid Ali al-Sistani's Urdu book "توضیح المسائل" (Tauzih ul Masail, 542 pages).
+You are given images of actual pages of the book, each labelled with its page number.
+RULES:
+1. Answer ONLY from what is written on these page images. Do not use outside knowledge or guess.
+2. Quote or closely paraphrase the relevant ruling text, and cite the exact masla number exactly as printed
+   on the page (numbers like ۱۵۸۱ at the start of a paragraph) and the page number from the label.
+3. Always include the tags [MASLA: number] and [PAGE: number] for every ruling you cite.
+4. If the answer is not on the given pages, say clearly that it was not found on these pages, mention the
+   closest related masail you do see, and suggest the user rephrase. Never invent a masla or page number.
+5. If the question is not about fiqh in this book (e.g. a greeting), reply briefly and politely.
+6. ${languageInstruction(language)}
+
+Book guide (for orientation only):
+$BOOK_GUIDE
+        """.trimIndent()
+
+        val contents = JSONArray()
+        // Recent conversation (text only)
+        val valid = mutableListOf<Pair<String, Boolean>>()
+        var expectUser = true
+        for (item in history) {
+            if (item.first.isNotBlank() && item.second == expectUser) { valid.add(item); expectUser = !expectUser }
+        }
+        if (valid.isNotEmpty() && valid.last().second) valid.removeAt(valid.size - 1)
+        valid.takeLast(4).forEach { (msg, isUser) ->
+            contents.put(JSONObject().put("role", if (isUser) "user" else "model").put("parts", JSONArray().put(textPart(msg.take(1500)))))
+        }
+
+        val parts = JSONArray()
+        for (p in pages) {
+            val jpeg = BookRepository.pageJpeg(context, p) ?: continue
+            parts.put(textPart("Book page $p:"))
+            parts.put(JSONObject().put("inline_data", JSONObject()
+                .put("mime_type", "image/jpeg")
+                .put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP))))
+        }
+        parts.put(textPart("Question: $query"))
+        contents.put(JSONObject().put("role", "user").put("parts", parts))
+
+        val body = JSONObject()
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(textPart(system))))
+            .put("contents", contents)
+            .put("generationConfig", JSONObject().put("temperature", 0.2))
+        val text = post(apiKey, model, body)
+        if (text.isBlank()) throw ApiException("AI سے کوئی جواب نہیں ملا، دوبارہ کوشش کریں۔")
+        return text
+    }
+
+    private fun parseResponse(context: Context, rawText: String, sentPages: List<Int>): AiResponse {
+        val masail = (Regex("\\[MASLA:\\s*([\\d۰-۹]+)\\]", RegexOption.IGNORE_CASE).findAll(rawText)
+            .mapNotNull { BookRepository.normalize(it.groupValues[1]).toIntOrNull() }).distinct().toList()
+        var pages = Regex("\\[PAGE:\\s*([\\d۰-۹]+)\\]", RegexOption.IGNORE_CASE).findAll(rawText)
+            .mapNotNull { BookRepository.normalize(it.groupValues[1]).toIntOrNull() }
+            .filter { it in 1..BookRepository.TOTAL_PAGES }.distinct().toList()
+        if (pages.isEmpty()) pages = masail.mapNotNull { BookRepository.pageForMasla(context, it) }.distinct()
+        if (pages.isEmpty()) pages = sentPages.take(2)
+        val clean = rawText
+            .replace(Regex("\\[MASLA:\\s*([\\d۰-۹]+)\\]", RegexOption.IGNORE_CASE), "(مسئلہ $1)")
+            .replace(Regex("\\[PAGE:\\s*([\\d۰-۹]+)\\]", RegexOption.IGNORE_CASE), "(صفحہ $1)")
             .trim()
+        return AiResponse(text = clean, referencedPages = pages, referencedMasail = masail)
+    }
 
+    // ------------------------------------------------------------------ offline answer
+
+    private fun noKeyNote(language: AppLanguage) = when (language) {
+        AppLanguage.URDU, AppLanguage.FARSI, AppLanguage.ARABIC ->
+            "ℹ️ AI جواب کے لئے Gemini API key درکار ہے (اوپر 🔑 بٹن)۔ فی الحال کتاب میں تلاش کے نتائج دکھائے جا رہے ہیں — درست حکم کے لئے نیچے دیئے گئے صفحات کھول کر پڑھیں۔"
+        else -> "ℹ️ An AI answer needs a Gemini API key (🔑 button at top). Showing book search results for now — open the pages below to read the exact ruling."
+    }
+
+    private fun offlineNote(language: AppLanguage) = when (language) {
+        AppLanguage.URDU, AppLanguage.FARSI, AppLanguage.ARABIC ->
+            "📖 آف لائن موڈ: کتاب میں تلاش کے نتائج — درست حکم کے لئے صفحہ کھول کر پڑھیں۔"
+        else -> "📖 Offline mode: book search results — open a page to read the exact ruling."
+    }
+
+    private fun networkError(language: AppLanguage) = when (language) {
+        AppLanguage.URDU, AppLanguage.FARSI, AppLanguage.ARABIC -> "انٹرنیٹ سے رابطہ نہیں ہو سکا۔ کتاب میں تلاش کے نتائج:"
+        else -> "Could not connect to the internet. Book search results:"
+    }
+
+    private fun offlineAnswer(
+        context: Context,
+        query: String,
+        language: AppLanguage,
+        chapter: TauzihChapter?,
+        masla: Int?,
+        keywords: List<String>,
+        note: String
+    ): AiResponse {
+        val pages = LinkedHashSet<Int>()
+        explicitPage(query)?.let { pages.add(it) }
+        masla?.let { m -> BookRepository.pageForMasla(context, m)?.let { pages.add(it) } }
+        val hint = chapter?.let { it.pageStart..it.pageEnd }
+        BookRepository.search(context, query, keywords, hint, limit = 3).forEach { pages.add(it.page) }
+        if (pages.isEmpty() && chapter != null) pages.add(chapter.pageStart)
+
+        val sb = StringBuilder(note).append("\n\n")
+        if (pages.isEmpty()) {
+            sb.append(
+                if (language == AppLanguage.ENGLISH || language == AppLanguage.ROMAN_URDU)
+                    "No matching page found. Try Urdu words from the book (e.g. روزہ، وضو، نماز) or the Chapters tab."
+                else "کوئی مطابقت رکھنے والا صفحہ نہیں ملا۔ کتاب کے الفاظ (مثلاً روزہ، وضو، نماز) میں سوال لکھیں یا ابواب والے حصے سے دیکھیں۔"
+            )
+        }
+        chapter?.let { sb.append("باب: ${it.titleUrdu} (صفحات ${it.pageStart}–${it.pageEnd})\n\n") }
+        pages.take(3).forEach { p ->
+            val range = BookRepository.masailOnPage(context, p)
+            sb.append("• صفحہ $p")
+            if (range != null) sb.append("  (مسائل تقریباً ${range.first}–${range.last})")
+            sb.append("\n")
+            val snip = BookRepository.snippet(context, p, query, keywords)
+            if (snip.isNotBlank()) sb.append("  «$snip»\n")
+            sb.append("\n")
+        }
         return AiResponse(
-            text = cleanText,
-            referencedPages = allPages,
-            referencedMasail = allMasail
+            text = sb.toString().trim(),
+            referencedPages = pages.take(3).toList(),
+            referencedMasail = listOfNotNull(masla)
         )
     }
 
-    private fun getOfflineFallback(query: String, language: AppLanguage): AiResponse {
+    private fun guessChapter(query: String): TauzihChapter? {
         val q = query.lowercase().trim()
-
-        // 1. Check if user specified a Masla number directly (e.g. "masla 1581" or "مسئلہ 256" or "1581")
-        val numbersInQuery = Regex("\\d+").findAll(q).mapNotNull { it.value.toIntOrNull() }.toList()
-
-        var matchedMasla: Int? = null
-        var matchedPage: Int? = null
-
-        // If number is a valid page number (with keyword "page" or "صفحہ")
-        val isExplicitPage = q.contains("page") || q.contains("صفحہ") || q.contains("safha")
-        if (isExplicitPage && numbersInQuery.isNotEmpty()) {
-            val p = numbersInQuery.first()
-            if (p in 1..542) {
-                matchedPage = p
-            }
-        }
-
-        // Check if number corresponds to a Masla
-        if (matchedPage == null && numbersInQuery.isNotEmpty()) {
-            val possibleMasla = numbersInQuery.first()
-            val ch = TauzihDatabase.chapters.find { possibleMasla in it.maslaStart..it.maslaEnd }
-            if (ch != null) {
-                matchedMasla = possibleMasla
-                val ratio = if (ch.maslaEnd > ch.maslaStart) (possibleMasla - ch.maslaStart).toFloat() / (ch.maslaEnd - ch.maslaStart) else 0f
-                matchedPage = (ch.pageStart + ratio * (ch.pageEnd - ch.pageStart)).toInt().coerceIn(ch.pageStart, ch.pageEnd)
-            }
-        }
-
-        // Check for general greetings
-        if (q in listOf("salam", "assalam", "hello", "hi", "hey", "slam", "kese ho", "kia hal ha") || 
-            q.startsWith("سلام") || q.startsWith("اسلام علیکم") || q.startsWith("السلام علیکم") || q.contains("کیسے ہو") || q.contains("کیا حال")) {
-            val greetText = when (language) {
-                AppLanguage.URDU -> """
-وعلیکم السلام و رحمۃ اللہ!
-میں حضرت آیت اللہ العظمیٰ سید علی حسینی سیستانی (دام ظلہ) کی کتاب 'توضیح المسائل' کا آف لائن و آن لائن فقہی اسسٹنٹ ہوں۔
-
-آپ کتاب کے تمام ۵۴۲ صفحات اور ۲۸۰۰ سے زائد مسائل میں سے کوئی بھی فقہی سوال پوچھ سکتے ہیں، مثلاً:
-• روزے کے باطل ہونے کی چیزیں (مسئلہ ۱۵۸۱، صفحہ ۲۹۸)
-• مسافر کی نماز قصر ہونے کی شرائط (مسئلہ ۱۲۸۰، صفحہ ۲۵۱)
-• وضو کا صحیح طریقہ اور شرائط (مسئلہ ۲۴۲، صفحہ ۵۶)
-• خمس کن چیزوں پر واجب ہوتا ہے اور اس کا حساب (مسئلہ ۱۷۷۰، صفحہ ۳۲۸)
-• غسل جنابت کا طریقہ (مسئلہ ۳۶۶، صفحہ ۷۸)
-• زکوٰۃ فطرہ کے احکام اور مقدار (مسئلہ ۱۹۹۹، صفحہ ۳۷۲)
-
-براہ کرم اپنا مطلوبہ سوال تحریر فرمائیں!
-                """.trimIndent()
-                AppLanguage.ENGLISH -> """
-Wa Alaikum Assalam wa Rahmatullah!
-I am your AI Jurisprudence Assistant for Ayatollah Sayyid Ali al-Husayni al-Sistani's "Tauzih ul Masail" (542 Pages).
-
-You can ask any Islamic fiqh ruling, and I will provide the answer along with exact Masla and Page references and direct book links. Please feel free to ask your question!
-                """.trimIndent()
-                AppLanguage.ROMAN_URDU -> """
-Wa Alaikum Assalam wa Rahmatullah!
-Main Ayatollah Sayyid Ali al-Husayni al-Sistani ki kitab 'Tauzih ul Masail' ka Fiqhi Assistant hoon.
-
-Aap poori kitab (542 pages) me se koi bhi sawal pooch sakte hain. Har jawab me exact Masla Number aur Page Number ka direct link milega. Apna sawal likhein!
-                """.trimIndent()
-                AppLanguage.FARSI -> """
-و علیکم السلام و رحمة الله!
-من دستیار هوشمند فقهی کتاب «توضیح المسائل» حضرت آیت الله العظمی سیستانی هستم. لطفاً سوال شرعی خود را مطرح فرمایید تا همراه با شماره مسئله و صفحه پاسخ داده شود.
-                """.trimIndent()
-                AppLanguage.ARABIC -> """
-وعليكم السلام ورحمة الله وبركاته!
-أهلاً بكم في المساعد الفقهي لكتاب «توضيح المسائل» لسماحة آية الله العظمى السيد علي الحسيني السيستاني (دام ظله). تفضلوا بطرح مسألتكم الشرعية.
-                """.trimIndent()
-            }
-            return AiResponse(text = greetText, referencedPages = listOf(16), referencedMasail = listOf(1))
-        }
-
-        // 2. Keyword matching across topics
-        val matchingChapter = when {
-            matchedPage != null -> TauzihDatabase.findChapterForPage(matchedPage) ?: TauzihDatabase.chapters.first()
-            q.contains("روزہ") || q.contains("روزے") || q.contains("roza") || q.contains("fast") || q.contains("افطار") || q.contains("صوم") || q.contains("رمضان") || q.contains("سحر") || q.contains("کفارہ") ->
-                TauzihDatabase.chapters.find { it.id == "roza" }!!
+        return when {
+                        q.contains("روزہ") || q.contains("روزے") || q.contains("roza") || q.contains("fast") || q.contains("افطار") || q.contains("صوم") || q.contains("رمضان") || q.contains("سحر") || q.contains("کفارہ") ->
+                TauzihDatabase.chapters.find { it.id == "roza" }
             q.contains("قصر") || q.contains("مسافر") || q.contains("qasr") || q.contains("safar") || q.contains("travel") || q.contains("فرسخ") || q.contains("ترخص") ->
-                TauzihDatabase.chapters.find { it.id == "musafir_namaz" }!!
+                TauzihDatabase.chapters.find { it.id == "musafir_namaz" }
             q.contains("وضو") || q.contains("wudu") || q.contains("wudhu") || q.contains("wuzu") || q.contains("مسح") || q.contains("جبیرہ") ->
-                TauzihDatabase.chapters.find { it.id == "wudhu" }!!
+                TauzihDatabase.chapters.find { it.id == "wudhu" }
             q.contains("خمس") || q.contains("khums") || q.contains("سہم") || q.contains("سادات") || q.contains("منافع") ->
-                TauzihDatabase.chapters.find { it.id == "khums" }!!
+                TauzihDatabase.chapters.find { it.id == "khums" }
             q.contains("زکو") || q.contains("فطرہ") || q.contains("فطره") || q.contains("zakat") || q.contains("fitra") ->
-                TauzihDatabase.chapters.find { it.id == "zakat" }!!
+                TauzihDatabase.chapters.find { it.id == "zakat" }
             q.contains("غسل") || q.contains("جنابت") || q.contains("ghusl") || q.contains("janabat") || q.contains("مجنب") ->
-                TauzihDatabase.chapters.find { it.id == "ghusl_janabat" }!!
+                TauzihDatabase.chapters.find { it.id == "ghusl_janabat" }
             q.contains("نجس") || q.contains("نجاست") || q.contains("پیشاب") || q.contains("پاخانہ") || q.contains("خون") || q.contains("منی") || q.contains("کتا") || q.contains("شراب") || q.contains("najasat") || q.contains("پاک") ->
-                TauzihDatabase.chapters.find { it.id == "najasat" }!!
+                TauzihDatabase.chapters.find { it.id == "najasat" }
             q.contains("مطہر") || q.contains("پانی") || q.contains("کُر") || q.contains("قلیل") || q.contains("جاری") || q.contains("بارش") || q.contains("kurr") || q.contains("water") ->
-                TauzihDatabase.chapters.find { it.id == "mutahhirat" }!!
+                TauzihDatabase.chapters.find { it.id == "mutahhirat" }
             q.contains("استبراء") || q.contains("istibra") || q.contains("بیت الخلاء") || q.contains("ٹائلٹ") || q.contains("toilet") ->
-                TauzihDatabase.chapters.find { it.id == "baitulkhala" }!!
+                TauzihDatabase.chapters.find { it.id == "baitulkhala" }
             q.contains("حیض") || q.contains("استحاضہ") || q.contains("نفاس") || q.contains("عورت") || q.contains("haiz") || q.contains("nifas") || q.contains("istihaza") ->
-                TauzihDatabase.chapters.find { it.id == "women_rulings" }!!
+                TauzihDatabase.chapters.find { it.id == "women_rulings" }
             q.contains("میت") || q.contains("کفن") || q.contains("دفن") || q.contains("جنازہ") || q.contains("قبر") || q.contains("وحشت") || q.contains("mayyit") ->
-                TauzihDatabase.chapters.find { it.id == "mayyit" }!!
+                TauzihDatabase.chapters.find { it.id == "mayyit" }
             q.contains("تیمم") || q.contains("tayammum") || q.contains("مٹی") ->
-                TauzihDatabase.chapters.find { it.id == "tayammum" }!!
+                TauzihDatabase.chapters.find { it.id == "tayammum" }
             q.contains("نکاح") || q.contains("شادی") || q.contains("متعہ") || q.contains("مہر") || q.contains("nikah") || q.contains("marriage") || q.contains("رضاعت") || q.contains("دودھ") ->
-                TauzihDatabase.chapters.find { it.id == "nikah" }!!
+                TauzihDatabase.chapters.find { it.id == "nikah" }
             q.contains("طلاق") || q.contains("عدت") || q.contains("خلع") || q.contains("talaq") || q.contains("divorce") ->
-                TauzihDatabase.chapters.find { it.id == "talaq" }!!
+                TauzihDatabase.chapters.find { it.id == "talaq" }
             q.contains("حج") || q.contains("عمرہ") || q.contains("طواف") || q.contains("hajj") || q.contains("umrah") ->
-                TauzihDatabase.chapters.find { it.id == "hajj" }!!
+                TauzihDatabase.chapters.find { it.id == "hajj" }
             q.contains("سود") || q.contains("ربا") || q.contains("خرید") || q.contains("فروخت") || q.contains("بیع") || q.contains("riba") || q.contains("trade") || q.contains("خیار") ->
-                TauzihDatabase.chapters.find { it.id == "muamalat_buying" }!!
+                TauzihDatabase.chapters.find { it.id == "muamalat_buying" }
             q.contains("اجارہ") || q.contains("کرایہ") || q.contains("مکان") || q.contains("شراکت") || q.contains("صلح") || q.contains("rent") ->
-                TauzihDatabase.chapters.find { it.id == "ijarah_shirakat" }!!
+                TauzihDatabase.chapters.find { it.id == "ijarah_shirakat" }
             q.contains("قرض") || q.contains("امانت") || q.contains("رہن") || q.contains("گروی") || q.contains("ضمانت") || q.contains("loan") ->
-                TauzihDatabase.chapters.find { it.id == "qarz_amanat" }!!
+                TauzihDatabase.chapters.find { it.id == "qarz_amanat" }
             q.contains("ذبح") || q.contains("شکار") || q.contains("گوشت") || q.contains("حلال") || q.contains("حرام") || q.contains("مچھلی") || q.contains("halal") || q.contains("meat") ->
-                TauzihDatabase.chapters.find { it.id == "food_slaughter" }!!
+                TauzihDatabase.chapters.find { it.id == "food_slaughter" }
             q.contains("میراث") || q.contains("وراثت") || q.contains("ترکہ") || q.contains("ارث") || q.contains("وارث") || q.contains("inheritance") ->
-                TauzihDatabase.chapters.find { it.id == "meeras" }!!
+                TauzihDatabase.chapters.find { it.id == "meeras" }
             q.contains("نماز") || q.contains("رکعت") || q.contains("سجدہ") || q.contains("رکوع") || q.contains("قنوت") || q.contains("تشہد") || q.contains("اذان") || q.contains("جماعت") || q.contains("namaz") || q.contains("prayer") ->
-                TauzihDatabase.chapters.find { it.id == "namaz_wajibat" }!!
-            else -> TauzihDatabase.chapters.first()
+                TauzihDatabase.chapters.find { it.id == "namaz_wajibat" }
+            else -> null
         }
-
-        val targetPageNum = matchedPage ?: matchingChapter.pageStart
-        val samplePage = TauzihDatabase.getPage(targetPageNum)
-        val targetMasla = matchedMasla ?: matchingChapter.maslaStart
-
-        val text = when (language) {
-            AppLanguage.URDU -> """
-حضرت آیت اللہ العظمیٰ سید علی حسینی سیستانی (مدظلہ العالی) کے فتوے کے مطابق:
-
-باب: ${matchingChapter.titleUrdu}
-متعلقہ مسئلہ نمبر: مسئلہ نمبر $targetMasla (دائرہ: مسئلہ ${matchingChapter.maslaStart} تا ${matchingChapter.maslaEnd})
-کتاب کا صفحہ نمبر: صفحہ نمبر $targetPageNum (از ۵۴۲)
-
-خلاصہ فقہی حکم:
-${matchingChapter.description}
-
-اصل کتاب 'توضیح المسائل' کا اقتباس:
-"${samplePage.contentUrdu.take(350)}..."
-
-(مکمل صفحہ اور متعلقہ مسائل کو براہِ راست پڑھنے، ڈاؤنلوڈ یا شیئر کرنے کے لئے نیچے دیئے گئے بٹن پر کلک کریں)
-            """.trimIndent()
-
-            AppLanguage.ENGLISH -> """
-According to the official rulings of Ayatollah Sayyid Ali al-Husayni al-Sistani (Tauzih ul Masail):
-
-Chapter: ${matchingChapter.titleEnglish} (${matchingChapter.titleUrdu})
-Masla Number Reference: Masla $targetMasla (Range: Masail ${matchingChapter.maslaStart} to ${matchingChapter.maslaEnd})
-Book Page: Page $targetPageNum (of 542)
-
-Summary of Ruling:
-${matchingChapter.description}
-
-Reference Excerpt:
-"${samplePage.contentUrdu.take(280)}..."
-
-(Click the button below to directly open, view or download this page in the book reader)
-            """.trimIndent()
-
-            AppLanguage.ROMAN_URDU -> """
-Ayatollah Sayyid Ali al-Husayni al-Sistani ki Tauzih ul Masail ke mutabiq:
-
-Bab: ${matchingChapter.titleUrdu} (${matchingChapter.titleEnglish})
-Masla Reference: Masla number $targetMasla (Range: Masla ${matchingChapter.maslaStart} se ${matchingChapter.maslaEnd})
-Page Reference: Page number $targetPageNum (total 542 me se)
-
-Shar'i Hukm ka khulasa:
-${matchingChapter.description}
-
-(Direct ye page dekhne, parhne aur download karne ke liye niche diye gaye button par click karein)
-            """.trimIndent()
-
-            AppLanguage.FARSI -> """
-مطابق با فتاوای حضرت آیت الله العظمی سید علی حسینی سیستانی در کتاب «توضیح المسائل»:
-
-باب: ${matchingChapter.titleFarsi}
-شماره مسأله: مسأله $targetMasla (از مسأله ${matchingChapter.maslaStart} تا ${matchingChapter.maslaEnd})
-شماره صفحه: صفحه $targetPageNum (از کل ۵۴۲ صفحه)
-
-خلاصه احکام:
-${matchingChapter.description}
-
-(جهت مطالعه مستقیم، دانلود یا اشتراک‌گذاری متن این صفحه بر روی دکمه زیر کلیک فرمایید)
-            """.trimIndent()
-
-            AppLanguage.ARABIC -> """
-وفقاً لفتاوى سماحة المرجع الديني الأعلى آية الله العظمى السيد علي الحسيني السيستاني (دام ظله) في «توضيح المسائل»:
-
-الباب: ${matchingChapter.titleArabic}
-رقم المسألة: المسألة $targetMasla (نطاق المسائل ${matchingChapter.maslaStart} إلى ${matchingChapter.maslaEnd})
-رقم الصفحة: صفحة $targetPageNum (من ۵۴۲ صفحة)
-
-خلاصة الحكم الشرعي:
-${matchingChapter.description}
-
-(لمطالعة وتحميل الصفحة مباشرة من الكتاب، يرجى الضغط على الزر أدناه)
-            """.trimIndent()
-        }
-
-        return AiResponse(
-            text = text,
-            referencedPages = listOf(targetPageNum),
-            referencedMasail = listOf(targetMasla)
-        )
     }
 }
 
