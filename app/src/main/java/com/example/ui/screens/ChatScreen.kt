@@ -1,15 +1,13 @@
 package com.example.ui.screens
 
-import android.content.Context
 import android.content.Intent
-import android.speech.tts.TextToSpeech
+import android.graphics.Bitmap
 import android.widget.Toast
-import androidx.compose.animation.*
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -19,11 +17,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,26 +31,29 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.example.data.AppLanguage
+import com.example.data.BookRepository
 import com.example.data.ChatMessage
-import com.example.data.SettingsStore
-import com.example.network.GeminiService
-import android.content.ActivityNotFoundException
-import android.net.Uri
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.example.data.MaslaFinder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.util.*
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.UUID
 
-// Custom Vertical Scrollbar Modifier for LazyColumn and scrollable views
+// Vertical scrollbar for LazyColumn
 fun Modifier.drawVerticalScrollbar(
     state: LazyListState,
     color: Color = Color(0xFFD97706),
@@ -65,27 +64,20 @@ fun Modifier.drawVerticalScrollbar(
     val layoutInfo = state.layoutInfo
     val totalItems = layoutInfo.totalItemsCount
     val visibleItems = layoutInfo.visibleItemsInfo
-
     if (totalItems > 0 && visibleItems.isNotEmpty()) {
         val firstVisible = visibleItems.first().index
         val visibleCount = visibleItems.size
-
         val trackWidthPx = width.toPx()
         val trackHeightPx = size.height
-
-        // Draw scroll track
         drawRoundRect(
             color = trackColor,
             topLeft = Offset(size.width - trackWidthPx - 2.dp.toPx(), 0f),
             size = Size(trackWidthPx, trackHeightPx),
             cornerRadius = CornerRadius(trackWidthPx / 2, trackWidthPx / 2)
         )
-
-        // Draw scrollbar thumb
         val thumbHeightPx = (trackHeightPx * (visibleCount.toFloat() / totalItems)).coerceIn(36.dp.toPx(), trackHeightPx)
-        val scrollOffsetRatio = firstVisible.toFloat() / totalItems.coerceAtLeast(1)
-        val thumbOffsetY = ((trackHeightPx - thumbHeightPx) * scrollOffsetRatio).coerceIn(0f, trackHeightPx - thumbHeightPx)
-
+        val ratio = firstVisible.toFloat() / totalItems.coerceAtLeast(1)
+        val thumbOffsetY = ((trackHeightPx - thumbHeightPx) * ratio).coerceIn(0f, trackHeightPx - thumbHeightPx)
         drawRoundRect(
             color = color,
             topLeft = Offset(size.width - trackWidthPx - 2.dp.toPx(), thumbOffsetY),
@@ -95,582 +87,189 @@ fun Modifier.drawVerticalScrollbar(
     }
 }
 
+private val welcome = ChatMessage(
+    id = "welcome",
+    text = "السلام علیکم!\n\nیہ حضرت آیت اللہ العظمیٰ سید علی حسینی سیستانی (دام ظلہ) کی کتاب «توضیح المسائل» ہے۔ " +
+        "اپنا سوال اردو میں لکھیں، کتاب میں سے متعلقہ مسئلہ اپنی اصل عبارت کے ساتھ یہیں دکھا دیا جائے گا۔\n\n" +
+        "یہ ایپ مکمل آف لائن ہے — انٹرنیٹ کی ضرورت نہیں۔\n\n" +
+        "مثال: «روزہ کن چیزوں سے باطل ہوتا ہے» یا «مسئلہ 1581»",
+    isUser = false,
+    language = AppLanguage.URDU
+)
+
+private val suggestions = listOf(
+    "روزہ کن چیزوں سے باطل ہوتا ہے",
+    "مسافر کی نماز قصر کی شرائط",
+    "وضو باطل کرنے والی چیزیں",
+    "غسل جنابت کا ترتیبی طریقہ",
+    "خمس کن چیزوں پر واجب ہے",
+    "فطرہ کی مقدار",
+    "نماز میں رکعتوں کا شک",
+    "تیمم کا طریقہ"
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    currentLanguage: AppLanguage,
-    onLanguageChanged: (AppLanguage) -> Unit,
+    currentLanguage: AppLanguage = AppLanguage.URDU,
+    onLanguageChanged: (AppLanguage) -> Unit = {},
     onOpenPageInBook: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-    val clipboardManager = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     var inputText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    var hasApiKey by remember { mutableStateOf(SettingsStore.hasApiKey(context)) }
-    var isOfflineMode by remember { mutableStateOf(!SettingsStore.hasApiKey(context)) }
-    var showSettings by remember { mutableStateOf(!SettingsStore.hasApiKey(context)) }
+    var messages by remember { mutableStateOf(listOf(welcome)) }
 
-    // Selected message for full reading view
-    var fullViewMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    // Load the index in the background once, so the first answer is quick
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { BookRepository.paragraphs(context) } }
 
-    // TTS engine
-    var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
-    DisposableEffect(context) {
-        val tts = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                // Initialize default
-            }
-        }
-        ttsEngine = tts
-        onDispose {
-            tts.stop()
-            tts.shutdown()
-        }
-    }
-
-    // Default welcome messages based on language
-    val welcomeMessage = remember(currentLanguage) {
-        when (currentLanguage) {
-            AppLanguage.URDU -> ChatMessage(
-                id = "welcome_ur",
-                text = "السلام علیکم! میں حضرت آیت اللہ العظمیٰ سید علی حسینی سیستانی کی کتاب 'توضیح المسائل' کا آف لائن و آن لائن فقہی اسسٹنٹ ہوں۔\n\nآپ کتاب کے تمام ۵۴۲ صفحات اور ۲۸۰۰ سے زائد مسائل میں سے کوئی بھی سوال پوچھ سکتے ہیں۔ ہر جواب کے ساتھ مسئلہ نمبر اور صفحہ نمبر کا براہِ راست لنک دیا جائے گا جس سے آپ اصل کتاب کا وہی صفحہ کھول اور ڈاؤنلوڈ کر سکتے ہیں۔",
-                isUser = false,
-                language = AppLanguage.URDU,
-                referencedPages = listOf(16),
-                referencedMasail = listOf(1)
-            )
-            AppLanguage.ENGLISH -> ChatMessage(
-                id = "welcome_en",
-                text = "Assalamu Alaikum! I am your AI Jurisprudence Assistant for Ayatollah Sayyid Ali al-Husayni al-Sistani's 'Tauzih ul Masail' (542 Pages).\n\nAsk any question regarding Taharat, Namaz, Fasting, Khums, Zakat, Hajj, Nikah, or Muamalat. Every answer includes exact Masla & Page numbers with a direct link to open that page.",
-                isUser = false,
-                language = AppLanguage.ENGLISH,
-                referencedPages = listOf(16),
-                referencedMasail = listOf(1)
-            )
-            AppLanguage.ROMAN_URDU -> ChatMessage(
-                id = "welcome_ru",
-                text = "Assalamu Alaikum! Main Ayatollah Sistani ki kitab 'Tauzih ul Masail' ka AI Assistant hoon.\n\nAap Taharat, Namaz, Roza, Khums, Zakat, Hajj, Nikah, Talaq waghera ka koi bhi masla pooch sakte hain. Har jawab me exact Masla aur Page number ka link milega jahan se aap direct page parh aur download kar sakte hain.",
-                isUser = false,
-                language = AppLanguage.ROMAN_URDU,
-                referencedPages = listOf(16),
-                referencedMasail = listOf(1)
-            )
-            AppLanguage.FARSI -> ChatMessage(
-                id = "welcome_fa",
-                text = "سلام علیکم! من دستیار هوشمند فتاوای حضرت آیت الله العظمی سید علی حسینی سیستانی در کتاب «توضیح المسائل» هستم.\n\nشما می‌توانید هرگونه سوال در باب طهارت، نماز، روزه، خمس، زکات، حج، نکاح و معاملات مطرح نمایید. پاسخ‌ها همراه با شماره دقیق مسئله و شماره صفحه کتاب ارائه می‌شود.",
-                isUser = false,
-                language = AppLanguage.FARSI,
-                referencedPages = listOf(16),
-                referencedMasail = listOf(1)
-            )
-            AppLanguage.ARABIC -> ChatMessage(
-                id = "welcome_ar",
-                text = "السلام عليكم ورحمة الله! أنا المساعد الذكي لفتاوى سماحة آية الله العظمى السيد علي الحسيني السيستاني (دام ظله) في کتاب «توضيح المسائل».\n\nيمكنكم طرح أي مسألة فقهية، وستحصلون على الحكم بدقة مع رقم المسألة ورقم الصفحة ورابط قراءتها وتحميلها مباشرة.",
-                isUser = false,
-                language = AppLanguage.ARABIC,
-                referencedPages = listOf(16),
-                referencedMasail = listOf(1)
-            )
-        }
-    }
-
-    var messages by remember {
-        mutableStateOf(listOf(welcomeMessage))
-    }
-
-    // Dynamic suggestions based on selected language
-    val suggestedPrompts = remember(currentLanguage) {
-        when (currentLanguage) {
-            AppLanguage.URDU -> listOf(
-                "روزے کے باطل ہونے کی چیزیں کیا ہیں؟",
-                "مسافر کی نماز قصر ہونے کی آٹھ شرائط",
-                "وضو کا صحیح طریقہ اور واجبات",
-                "خمس کن چیزوں پر واجب ہوتا ہے اور کیسے حساب کریں؟",
-                "غسل جنابت کا ترتیبی طریقہ کیا ہے؟",
-                "زکوٰۃ فطرہ کی مقدار اور مصرف کیا ہے؟"
-            )
-            AppLanguage.ENGLISH -> listOf(
-                "What are the 9 things that invalidate the fast?",
-                "What are the conditions for traveler's Qasr prayer?",
-                "How to perform Wudhu properly step by step?",
-                "What items are subject to Khums and how is it calculated?",
-                "How to perform Ghusl Janabat correctly?",
-                "Who is eligible to receive Zakat-ul-Fitrah?"
-            )
-            AppLanguage.ROMAN_URDU -> listOf(
-                "Roza kin 9 cheezon se batil hota hai?",
-                "Musafir ki namaz qasr hone ki sharait kya hain?",
-                "Wudhu karne ka sahi tareeqa kya hai?",
-                "Khums ka hisab kaise lagaya jata hai?",
-                "Ghusl janabat ka tarteebi tareeqa batayein",
-                "Zakat-e-fitrah kitni deni hoti hai?"
-            )
-            AppLanguage.FARSI -> listOf(
-                "مبطلات نه گانه روزه کدامند؟",
-                "شرایط هشتگانه شکسته شدن نماز مسافر",
-                "روش صحیح وضو گرفتن چگونه است؟",
-                "خمس به چه چیزهایی تعلق می‌گیرد؟",
-                "احکام و کیفیت غسل جنابت ترتیبی",
-                "میزان و مصرف زکات فطره چقدر است؟"
-            )
-            AppLanguage.ARABIC -> listOf(
-                "ما هي مفطرات الصوم التسعة؟",
-                "ما هي شروط قصر صلاة المسافر؟",
-                "كيفية الوضوء الصحيحة وأحكامه؟",
-                "ما هي الأموال التي يتعلق بها الخمس؟",
-                "كيفية غسل الجنابة الترتيبي والارتماسي؟",
-                "مقدار زكاة الفطرة ومصارفها الشرعية؟"
-            )
-        }
-    }
-
-    fun sendMessage(query: String) {
-        if (query.isBlank() || isLoading) return
-        val priorHistory = messages.map { it.text to it.isUser }
-        val userMsg = ChatMessage(
-            id = UUID.randomUUID().toString(),
-            text = query.trim(),
-            isUser = true,
-            language = currentLanguage
-        )
+    fun send(query: String) {
+        val q = query.trim()
+        if (q.isEmpty() || isLoading) return
+        val userMsg = ChatMessage(id = UUID.randomUUID().toString(), text = q, isUser = true, language = AppLanguage.URDU)
         messages = messages + userMsg
         inputText = ""
         isLoading = true
-
-        coroutineScope.launch {
+        scope.launch {
             listState.animateScrollToItem(messages.size - 1)
-            val result = GeminiService.askTauzihAi(context, userMsg.text, currentLanguage, priorHistory, offlineMode = isOfflineMode)
-            result.onSuccess { aiResp ->
-                val botMsg = ChatMessage(
-                    id = UUID.randomUUID().toString(),
-                    text = aiResp.text,
-                    isUser = false,
-                    language = currentLanguage,
-                    referencedPages = aiResp.referencedPages,
-                    referencedMasail = aiResp.referencedMasail
-                )
-                messages = messages + botMsg
-                isLoading = false
-                // Smoothly scroll to the new answer
-                listState.animateScrollToItem(messages.size - 1, scrollOffset = 0)
-            }.onFailure {
-                val errorMsg = ChatMessage(
-                    id = UUID.randomUUID().toString(),
-                    text = "معذرت، خرابی پیش آئی: ${it.message ?: ""}۔ براہ کرم دوبارہ کوشش کریں۔",
-                    isUser = false,
-                    language = currentLanguage
-                )
-                messages = messages + errorMsg
-                isLoading = false
-            }
+            val ans = withContext(Dispatchers.IO) { MaslaFinder.answer(context, q) }
+            messages = messages + ChatMessage(
+                id = UUID.randomUUID().toString(),
+                text = ans.text,
+                isUser = false,
+                language = AppLanguage.URDU,
+                referencedPages = ans.pages,
+                paragraphs = ans.paragraphs
+            )
+            isLoading = false
+            listState.animateScrollToItem(messages.size - 1)
         }
     }
 
-    // Full Reading Dialog for complete readability with custom font zoom & scrollbar
-    if (fullViewMessage != null) {
-        val msg = fullViewMessage!!
-        var dialogFontSize by remember { mutableFloatStateOf(17f) }
-
-        AlertDialog(
-            onDismissRequest = { fullViewMessage = null },
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "تفصیلی فتویٰ و حوالہ",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = { if (dialogFontSize > 13f) dialogFontSize -= 2f },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.Default.TextDecrease, contentDescription = "Smaller", modifier = Modifier.size(18.dp))
-                        }
-                        Text("${dialogFontSize.toInt()}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        IconButton(
-                            onClick = { if (dialogFontSize < 28f) dialogFontSize += 2f },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.Default.TextIncrease, contentDescription = "Larger", modifier = Modifier.size(18.dp))
-                        }
-                    }
-                }
-            },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 450.dp)
-                        .verticalScroll(rememberScrollState())
-                        .padding(4.dp)
-                ) {
-                    Text(
-                        text = msg.text,
-                        fontSize = dialogFontSize.sp,
-                        lineHeight = (dialogFontSize * 1.7).sp,
-                        fontFamily = if (msg.language.isRtl) FontFamily.Serif else FontFamily.Default,
-                        textAlign = if (msg.language.isRtl) TextAlign.Right else TextAlign.Left,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    if (msg.referencedPages.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        msg.referencedPages.forEach { pageNum ->
-                            Button(
-                                onClick = {
-                                    fullViewMessage = null
-                                    onOpenPageInBook(pageNum)
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier.size(36.dp).clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.secondary),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("📖 کتاب کا صفحہ $pageNum کھولیں")
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = { fullViewMessage = null }) {
-                    Text("بند کریں")
-                }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = {
-                    clipboardManager.setText(AnnotatedString(msg.text))
-                    Toast.makeText(context, "جواب کاپی ہو گیا", Toast.LENGTH_SHORT).show()
-                }) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("کاپی کریں")
-                }
-            }
-        )
-    }
-
-    if (showSettings) {
-        ApiKeyDialog(
-            onDismiss = { showSettings = false },
-            onSaved = { saved ->
-                hasApiKey = saved
-                isOfflineMode = !saved
-                showSettings = false
-                Toast.makeText(
-                    context,
-                    if (saved) "API key محفوظ ہو گئی — آن لائن موڈ فعال" else "API key ہٹا دی گئی — آف لائن موڈ",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        )
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.secondary),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.MenuBook,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSecondary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "توضیح المسائل AI",
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isOfflineMode) Color(0xFFFBBF24) else Color(0xFF34D399))
+                                Icon(
+                                    Icons.AutoMirrored.Filled.MenuBook, contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSecondary, modifier = Modifier.size(20.dp)
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column {
                                 Text(
-                                    text = if (isOfflineMode) "آف لائن: کتاب میں تلاش" else "آن لائن: AI کتاب کے صفحات سے",
+                                    "توضیح المسائل", fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Text(
+                                    "آیت اللہ العظمیٰ سیستانی • مکمل آف لائن",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
                                 )
                             }
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                actions = {
-                    // Offline / Online toggle button
-                    FilledTonalButton(
-                        onClick = {
-                            if (isOfflineMode && !hasApiKey) {
-                                showSettings = true
-                                return@FilledTonalButton
-                            }
-                            isOfflineMode = !isOfflineMode
-                            val modeMsg = if (isOfflineMode) "آف لائن موڈ منتخب کیا گیا (انٹرنیٹ کے بغیر فعال)" else "آن لائن موڈ منتخب کیا گیا"
-                            Toast.makeText(context, modeMsg, Toast.LENGTH_SHORT).show()
-                        },
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                        ),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        modifier = Modifier.padding(end = 6.dp)
-                    ) {
-                        Icon(
-                            if (isOfflineMode) Icons.Default.CloudOff else Icons.Default.CloudQueue,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (isOfflineMode) "آف لائن" else "آن لائن", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Default.Key, contentDescription = "API key settings")
-                    }
-                    IconButton(onClick = {
-                        messages = listOf(welcomeMessage)
-                        Toast.makeText(context, "چیٹ صاف کر دی گئی", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Clear Chat")
-                    }
-                }
-            )
-        },
-        bottomBar = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
-                    .imePadding()
-                    .padding(8.dp)
-            ) {
-                // Quick suggested prompts
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(suggestedPrompts) { prompt ->
-                        SuggestionChip(
-                            onClick = { sendMessage(prompt) },
-                            label = { Text(prompt, fontSize = 12.sp, maxLines = 1) },
-                            colors = SuggestionChipDefaults.suggestionChipColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        )
-                    }
-                }
-
-                // Chat Input Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        placeholder = {
-                            Text(
-                                text = when (currentLanguage) {
-                                    AppLanguage.URDU -> "مسئلہ یا سوال درج کریں (آف لائن دستیاب)..."
-                                    AppLanguage.ENGLISH -> "Ask a fiqh question (offline ready)..."
-                                    AppLanguage.ROMAN_URDU -> "Sawal ya masla likhein (offline ready)..."
-                                    AppLanguage.FARSI -> "سوال شرعی بنویسید (آفلاین)..."
-                                    AppLanguage.ARABIC -> "اكتب سؤالك الشرعي (يعمل بدون انترنت)..."
-                                },
-                                fontSize = 13.sp
-                            )
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 8.dp),
-                        shape = RoundedCornerShape(24.dp),
-                        maxLines = 4,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        )
-                    )
-
-                    FloatingActionButton(
-                        onClick = { sendMessage(inputText) },
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(48.dp),
-                        shape = CircleShape
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Send,
-                                contentDescription = "Send",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    actions = {
+                        IconButton(onClick = {
+                            messages = listOf(welcome)
+                            Toast.makeText(context, "چیٹ صاف کر دی گئی", Toast.LENGTH_SHORT).show()
+                        }) { Icon(Icons.Default.Refresh, contentDescription = "چیٹ صاف کریں") }
                     }
-                }
-            }
-        },
-        modifier = modifier
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.background)
-        ) {
-            // Language Selection Bar
-            Surface(
-                tonalElevation = 2.dp,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(vertical = 6.dp, horizontal = 12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "زبان منتخب کریں / Select Language:",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "📖 ۵۴۲ صفحات • ۲۸۰۰ مسائل",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
+                )
+            },
+            bottomBar = {
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface)
+                        .imePadding()
+                        .padding(8.dp)
+                ) {
                     LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(AppLanguage.values()) { lang ->
-                            FilterChip(
-                                selected = (currentLanguage == lang),
-                                onClick = { onLanguageChanged(lang) },
-                                label = { Text(lang.nativeName, fontWeight = FontWeight.Bold) },
-                                leadingIcon = if (currentLanguage == lang) {
-                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                                } else null,
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                        items(suggestions) { s ->
+                            SuggestionChip(
+                                onClick = { send(s) },
+                                label = { Text(s, fontSize = 13.sp, maxLines = 1) },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
                                 )
                             )
                         }
                     }
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            placeholder = { Text("اپنا سوال اردو میں لکھیں…", fontSize = 14.sp) },
+                            modifier = Modifier.weight(1f).padding(end = 8.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            maxLines = 4,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                            )
+                        )
+                        FloatingActionButton(
+                            onClick = { send(inputText) },
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(48.dp),
+                            shape = CircleShape
+                        ) {
+                            if (isLoading) CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp
+                            ) else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "بھیجیں", modifier = Modifier.size(20.dp))
+                        }
+                    }
                 }
-            }
-
-            // Message List with VISIBLE VERTICAL SCROLLBAR on the side of the screen
+            },
+            modifier = modifier
+        ) { innerPadding ->
             Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                modifier = Modifier.fillMaxSize().padding(innerPadding)
+                    .background(MaterialTheme.colorScheme.background)
             ) {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
+                    modifier = Modifier.fillMaxSize()
                         .drawVerticalScrollbar(
                             state = listState,
                             color = MaterialTheme.colorScheme.secondary,
-                            trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
-                            width = 6.dp
+                            trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
                         )
                         .padding(horizontal = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp)
                 ) {
-                    items(messages) { msg ->
-                        ChatBubble(
-                            message = msg,
-                            onOpenPage = onOpenPageInBook,
-                            onOpenFullView = { fullViewMessage = msg },
-                            onSpeak = { text ->
-                                ttsEngine?.let { tts ->
-                                    when (msg.language) {
-                                        AppLanguage.URDU -> tts.language = Locale.forLanguageTag("ur")
-                                        AppLanguage.ARABIC -> tts.language = Locale.forLanguageTag("ar")
-                                        AppLanguage.FARSI -> tts.language = Locale.forLanguageTag("fa")
-                                        else -> tts.language = Locale.ENGLISH
-                                    }
-                                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "msg_tts")
-                                }
-                            }
-                        )
+                    items(messages, key = { it.id }) { msg ->
+                        if (msg.isUser) UserBubble(msg.text) else AnswerBubble(msg, onOpenPageInBook)
                     }
-
                     if (isLoading) {
                         item {
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth(0.92f)
-                                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Text(
-                                        text = "توضیح المسائل سے مسئلہ اور صفحہ نمبر تلاش کیا جا رہا ہے...",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Text("کتاب میں مسئلہ تلاش کیا جا رہا ہے…", style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
@@ -681,227 +280,65 @@ fun ChatScreen(
 }
 
 @Composable
-fun ChatBubble(
-    message: ChatMessage,
-    onOpenPage: (Int) -> Unit,
-    onOpenFullView: () -> Unit,
-    onSpeak: (String) -> Unit
-) {
-    val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
-
-    val alignment = if (message.isUser) Alignment.End else Alignment.Start
-    val bubbleColor = if (message.isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
-    val contentColor = if (message.isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-
-    // Custom scroll state for internal bubble if answer is long
-    val internalScrollState = rememberScrollState()
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = alignment
-    ) {
+private fun UserBubble(text: String) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
         Card(
-            colors = CardDefaults.cardColors(containerColor = bubbleColor),
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (message.isUser) 16.dp else 4.dp,
-                bottomEnd = if (message.isUser) 4.dp else 16.dp
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = if (message.isUser) 1.dp else 3.dp),
-            modifier = Modifier
-                .fillMaxWidth(if (message.isUser) 0.85f else 0.96f)
-                .then(
-                    if (!message.isUser) Modifier.border(
-                        1.5.dp,
-                        MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f),
-                        RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp)
-                    ) else Modifier
-                )
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary),
+            shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp),
+            modifier = Modifier.fillMaxWidth(0.85f)
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                // Header for Bot Message
-                if (!message.isUser) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Verified,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "فتویٰ حضرت آیت اللہ العظمیٰ سیستانی",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.secondary
-                            )
-                        }
+            Text(
+                text, modifier = Modifier.padding(14.dp), fontSize = 17.sp, lineHeight = 28.sp,
+                color = MaterialTheme.colorScheme.onPrimary, textAlign = TextAlign.Start
+            )
+        }
+    }
+}
 
-                        // Reading Actions Row (Zoom / Fullscreen / Speech / Copy / Share)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Fullscreen Reader Button (User requirement: easy reading of full text)
-                            IconButton(
-                                onClick = onOpenFullView,
-                                modifier = Modifier.size(30.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Fullscreen,
-                                    contentDescription = "Read Fullscreen",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            IconButton(
-                                onClick = { onSpeak(message.text) },
-                                modifier = Modifier.size(30.dp)
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.VolumeUp,
-                                    contentDescription = "Read Aloud",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    clipboardManager.setText(AnnotatedString(message.text))
-                                    Toast.makeText(context, "جواب کاپی کر لیا گیا", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.size(30.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.ContentCopy,
-                                    contentDescription = "Copy text",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    val sendIntent = Intent().apply {
-                                        action = Intent.ACTION_SEND
-                                        putExtra(Intent.EXTRA_TEXT, "${message.text}\n\n(از کتاب: توضیح المسائل حضرت آیت اللہ سیستانی)")
-                                        type = "text/plain"
-                                    }
-                                    context.startActivity(Intent.createChooser(sendIntent, "مسئلہ شیئر یا محفوظ کریں"))
-                                },
-                                modifier = Modifier.size(30.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Share,
-                                    contentDescription = "Share",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-                        }
-                    }
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                }
+@Composable
+private fun AnswerBubble(msg: ChatMessage, onOpenPage: (Int) -> Unit) {
+    val context = LocalContext.current
+    var showAll by remember(msg.id) { mutableStateOf(false) }
+    val paras = remember(msg.id) {
+        val all = BookRepository.paragraphs(context)
+        msg.paragraphs.mapNotNull { all.getOrNull(it) }
+    }
+    // First masla (plus its continuation on the next page) is shown; the rest behind a button
+    val firstGroup = remember(msg.id) {
+        if (paras.isEmpty()) emptyList()
+        else {
+            val head = paras.first()
+            val cont = paras.getOrNull(1)?.takeIf { it.isContinuation && it.page == head.page + 1 && it.index == head.index + 1 }
+            listOfNotNull(head, cont)
+        }
+    }
+    val visible = if (showAll) paras else firstGroup
 
-                // Body Text with comfortable layout
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
+            elevation = CardDefaults.cardElevation(3.dp),
+            modifier = Modifier.fillMaxWidth(0.98f)
+                .border(1.5.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f), RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp))
+        ) {
+            Column(Modifier.padding(12.dp)) {
                 Text(
-                    text = message.text,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        lineHeight = 25.sp,
-                        fontSize = 15.sp,
-                        fontFamily = if (message.language.isRtl) FontFamily.Serif else FontFamily.Default
-                    ),
-                    color = contentColor,
-                    textAlign = if (message.language.isRtl) TextAlign.Right else TextAlign.Left,
-                    modifier = Modifier.fillMaxWidth()
+                    msg.text, fontSize = 16.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
-
-                // Referenced Masla and Page Badges with Open Link (User Requirement!)
-                if (!message.isUser && (message.referencedPages.isNotEmpty() || message.referencedMasail.isNotEmpty())) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HorizontalDivider()
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "کتابی حوالہ جات و صفحات / Book References:",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Masla badges
-                    if (message.referencedMasail.isNotEmpty()) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 6.dp)
-                        ) {
-                            message.referencedMasail.take(3).forEach { maslaNum ->
-                                Box(
-                                    modifier = Modifier
-                                        .padding(end = 6.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.secondaryContainer)
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = "مسئلہ نمبر $maslaNum",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Direct Page Open Action Button
-                    message.referencedPages.forEach { pageNum ->
-                        Button(
-                            onClick = { onOpenPage(pageNum) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.MenuBook,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "📖 صفحہ نمبر $pageNum کھولیں اور ڈاؤنلوڈ کریں",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    // Button to expand full reading view if user wants large text
-                    TextButton(
-                        onClick = onOpenFullView,
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(top = 4.dp)
-                    ) {
-                        Icon(Icons.Default.ZoomIn, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
+                visible.forEachIndexed { i, p ->
+                    Spacer(Modifier.height(10.dp))
+                    MaslaImage(p, onOpenPage, isContinuation = i > 0 && p.isContinuation && visible[i - 1].page == p.page - 1)
+                }
+                if (paras.size > firstGroup.size) {
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { showAll = !showAll }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(if (showAll) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "بڑی اسکرین پر فونٹ زوم کے ساتھ مکمل پڑھیں",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.secondary,
-                            fontWeight = FontWeight.SemiBold
+                            if (showAll) "کم دکھائیں" else "مزید متعلقہ مسائل (${paras.size - firstGroup.size})",
+                            fontSize = 15.sp, fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -910,82 +347,86 @@ fun ChatBubble(
     }
 }
 
-
 @Composable
-fun ApiKeyDialog(onDismiss: () -> Unit, onSaved: (Boolean) -> Unit) {
+private fun MaslaImage(p: BookRepository.Paragraph, onOpenPage: (Int) -> Unit, isContinuation: Boolean) {
     val context = LocalContext.current
-    var key by remember { mutableStateOf(SettingsStore.savedApiKey(context)) }
-    var model by remember { mutableStateOf(SettingsStore.model(context)) }
-    var testResult by remember { mutableStateOf<String?>(null) }
-    var testing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("🔑 Gemini API Key", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+    var zoomed by remember { mutableStateOf(false) }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val boxWidth = maxWidth
+        val widthPx = with(LocalDensity.current) { boxWidth.toPx() }.toInt()
+        val bmp by produceState<Bitmap?>(null, p.index, widthPx) {
+            value = withContext(Dispatchers.IO) { BookRepository.renderParagraph(context, p, (widthPx * 1.6f).toInt()) }
+        }
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                .background(Color.White)
+        ) {
+            if (isContinuation) {
                 Text(
-                    "AI جواب کتاب کے اصل صفحات پڑھ کر دیتا ہے۔ اس کے لئے اپنی مفت Gemini API key درج کریں۔ " +
-                        "key صرف آپ کے فون میں محفوظ رہتی ہے۔\n\n" +
-                        "Key بنانے کا طریقہ: aistudio.google.com/apikey کھولیں → Create API key → کاپی کر کے یہاں پیسٹ کریں۔",
-                    fontSize = 13.sp,
-                    lineHeight = 22.sp,
-                    textAlign = TextAlign.Right,
-                    modifier = Modifier.fillMaxWidth()
+                    "(یہ مسئلہ اگلے صفحے ${p.page} پر جاری ہے)", fontSize = 12.sp,
+                    color = Color(0xFF6B7280), modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
-                Spacer(Modifier.height(6.dp))
-                TextButton(onClick = {
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
-                    } catch (_: ActivityNotFoundException) {}
-                }) { Text("aistudio.google.com/apikey کھولیں") }
-                OutlinedTextField(
-                    value = key,
-                    onValueChange = { key = it.trim() },
-                    label = { Text("API key") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = model,
-                    onValueChange = { model = it.trim() },
-                    label = { Text("Model") },
-                    singleLine = true,
-                    supportingText = { Text("ڈیفالٹ: ${SettingsStore.DEFAULT_MODEL}", fontSize = 11.sp) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(
-                    enabled = !testing,
-                    onClick = {
-                        testing = true
-                        testResult = null
-                        scope.launch {
-                            testResult = GeminiService.testKey(key, model).second
-                            testing = false
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    if (testing) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    else Text("Key ٹیسٹ کریں")
+            }
+            val b = bmp
+            if (b == null) {
+                Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                 }
-                testResult?.let {
-                    Spacer(Modifier.height(6.dp))
-                    Text(it, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Right, modifier = Modifier.fillMaxWidth())
+            } else {
+                Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    Image(
+                        bitmap = b.asImageBitmap(),
+                        contentDescription = "توضیح المسائل صفحہ ${p.page}",
+                        contentScale = ContentScale.FillWidth,
+                        modifier = Modifier.width(if (zoomed) boxWidth * 1.6f else boxWidth)
+                            .clickable { zoomed = !zoomed }
+                    )
                 }
             }
-        },
-        confirmButton = {
-            Button(onClick = {
-                SettingsStore.save(context, key, model.ifBlank { SettingsStore.DEFAULT_MODEL })
-                onSaved(SettingsStore.hasApiKey(context))
-            }) { Text("محفوظ کریں") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("بعد میں") }
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "صفحہ ${p.page}", fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 4.dp)
+                )
+                Row {
+                    IconButton(onClick = { zoomed = !zoomed }) {
+                        Icon(if (zoomed) Icons.Default.ZoomOut else Icons.Default.ZoomIn, contentDescription = "بڑا کریں")
+                    }
+                    IconButton(onClick = {
+                        scope.launch { shareParagraph(context, p) }
+                    }) { Icon(Icons.Default.Share, contentDescription = "شیئر کریں") }
+                    TextButton(onClick = { onOpenPage(p.page) }) { Text("پورا صفحہ", fontSize = 14.sp) }
+                }
+            }
         }
-    )
+    }
+}
+
+private suspend fun shareParagraph(context: android.content.Context, p: BookRepository.Paragraph) {
+    try {
+        val file = withContext(Dispatchers.IO) {
+            val bmp = BookRepository.renderParagraph(context, p, 1400) ?: return@withContext null
+            val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+            val f = File(dir, "tauzih_masla_${p.page}_${p.index}.jpg")
+            f.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            f
+        } ?: return
+        val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "image/jpeg"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_TEXT, "توضیح المسائل (آیت اللہ سیستانی) — صفحہ ${p.page}")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "مسئلہ شیئر کریں"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "شیئر نہیں ہو سکا", Toast.LENGTH_SHORT).show()
+    }
 }

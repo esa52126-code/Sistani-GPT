@@ -9,92 +9,175 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 /**
- * Access to the real book: the bundled PDF (for exact page images) and an OCR text index
- * (used only to *find* relevant pages – the OCR text is noisy because the book is in Nastaleeq).
+ * Fully offline access to the book.
  *
- * Assets (generated from urdu-tozih.pdf):
- *  - book/tauzih.pdf          the original 542-page book
- *  - book/ocr.txt             OCR text, pages separated by lines "<<<PAGE n>>>"
- *  - book/masla_index.tsv     page \t firstMasla \t lastMasla  (best-effort, from OCR)
+ * Assets (generated from urdu-tozih.pdf, see tools/):
+ *  - book/tauzih.pdf     the original 542-page book (shown as images – always exact)
+ *  - book/masail.tsv     one row per paragraph (masla) with its position on the page and OCR text:
+ *                        page, x0, y0, x1, y1 (0..10000 of page size), estimatedMasla, continuation, text
+ * The OCR text is only used to *find* a masla; the user always sees the real printed paragraph.
  */
 object BookRepository {
     const val TOTAL_PAGES = 542
 
     private const val PDF_ASSET = "book/tauzih.pdf"
-    private const val OCR_ASSET = "book/ocr.txt"
-    private const val MASLA_ASSET = "book/masla_index.tsv"
+    private const val MASAIL_ASSET = "book/masail.tsv"
+    private const val HEADINGS_ASSET = "book/headings.tsv"
 
-    @Volatile private var pageText: Map<Int, String>? = null
-    @Volatile private var pageNorm: Map<Int, String>? = null
-    @Volatile private var maslaIndex: Map<Int, IntRange>? = null
+    data class Paragraph(
+        val index: Int,
+        val page: Int,
+        val x0: Float, val y0: Float, val x1: Float, val y1: Float,
+        val estimatedMasla: Int,
+        val isContinuation: Boolean,
+        val norm: String
+    )
+
+    /** A heading from the book's table of contents, located on its page. */
+    data class Heading(val title: String, val page: Int, val y: Float, val words: List<String>, val titleWordCount: Int)
+
+    @Volatile private var paragraphs: List<Paragraph>? = null
+    @Volatile private var headings: List<Heading>? = null
     private var pdfFile: File? = null
     private val renderLock = Any()
 
-    // ---------------------------------------------------------------- loading
+    // ------------------------------------------------------------------ loading
 
-    private fun ensureLoaded(context: Context) {
-        if (pageText != null) return
+    fun paragraphs(context: Context): List<Paragraph> {
+        paragraphs?.let { return it }
         synchronized(this) {
-            if (pageText != null) return
-            val raw = context.assets.open(OCR_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() }
-            val map = HashMap<Int, String>()
-            val marker = Regex("<<<PAGE (\\d+)>>>")
-            val matches = marker.findAll(raw).toList()
-            matches.forEachIndexed { i, m ->
-                val page = m.groupValues[1].toInt()
-                val start = m.range.last + 1
-                val end = if (i + 1 < matches.size) matches[i + 1].range.first else raw.length
-                map[page] = raw.substring(start, end).trim()
-            }
-            val idx = HashMap<Int, IntRange>()
-            runCatching {
-                context.assets.open(MASLA_ASSET).bufferedReader(Charsets.UTF_8).useLines { lines ->
-                    lines.forEach { line ->
-                        val p = line.split('\t')
-                        if (p.size >= 3) {
-                            val pg = p[0].toIntOrNull(); val a = p[1].toIntOrNull(); val b = p[2].toIntOrNull()
-                            if (pg != null && a != null && b != null) idx[pg] = a..b
-                        }
+            paragraphs?.let { return it }
+            val list = ArrayList<Paragraph>(3200)
+            context.assets.open(MASAIL_ASSET).bufferedReader(Charsets.UTF_8).useLines { lines ->
+                lines.forEach { line ->
+                    val p = line.split('\t')
+                    if (p.size >= 8) {
+                        list.add(
+                            Paragraph(
+                                index = list.size,
+                                page = p[0].toInt(),
+                                x0 = p[1].toInt() / 10000f, y0 = p[2].toInt() / 10000f,
+                                x1 = p[3].toInt() / 10000f, y1 = p[4].toInt() / 10000f,
+                                estimatedMasla = p[5].toInt(),
+                                isContinuation = p[6] == "1",
+                                norm = compact(normalize(p[7]))
+                            )
+                        )
                     }
                 }
             }
-            maslaIndex = idx
-            pageNorm = map.mapValues { compact(normalize(it.value)) }
-            pageText = map
+            paragraphs = list
+            return list
         }
     }
 
-    fun ocrText(context: Context, page: Int): String {
-        ensureLoaded(context)
-        return pageText?.get(page).orEmpty()
+    fun headings(context: Context): List<Heading> {
+        headings?.let { return it }
+        synchronized(this) {
+            headings?.let { return it }
+            val list = ArrayList<Heading>(320)
+            context.assets.open(HEADINGS_ASSET).bufferedReader(Charsets.UTF_8).useLines { lines ->
+                lines.forEach { line ->
+                    val p = line.split('\t')
+                    if (p.size >= 3) {
+                        val y = p[2].toInt()
+                        val extra = p.getOrNull(3).orEmpty()
+                        list.add(Heading(p[0], p[1].toInt(), if (y < 0) -1f else y / 10000f, words("${p[0]} $extra"), words(p[0]).size))
+                    }
+                }
+            }
+            headings = list
+            return list
+        }
     }
 
-    /** Masail (approximate) printed on a page, from the OCR index. */
+    private fun words(s: String): List<String> =
+        normalize(s).split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length >= 2 && it !in normStopWords }
+
+    private fun stem(w: String): String = when {
+        w.length >= 5 && (w.endsWith("وں") || w.endsWith("یں")) -> w.dropLast(2)
+        w.length >= 4 && (w.last() == 'ہ' || w.last() == 'ی' || w.last() == 'ا') -> w.dropLast(1)
+        else -> w
+    }
+
+    private fun sameWord(a: String, b: String): Boolean {
+        val x = stem(a); val y = stem(b)
+        if (x == y) return true
+        val short = if (x.length <= y.length) x else y
+        val long = if (x.length <= y.length) y else x
+        return short.length >= 3 && long.startsWith(short) && long.length - short.length <= 3
+    }
+
+    /** Each question word with its alternatives (synonyms / plural forms). */
+    private fun queryGroups(query: String): List<List<String>> {
+        val words = normalize(query)
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .map { it.trim() }
+            .filter { it.length >= 2 && it !in normStopWords && it.any { c -> c.isLetter() } }
+        return words.map { w -> (listOf(w) + (synonyms[w] ?: emptyList())).distinct() }
+            .distinctBy { stem(it.first()) }
+    }
+
+    data class HeadingHit(val heading: Heading, val score: Double, val coverage: Double)
+
+    /** Match a question against the clean table-of-contents headings. */
+    fun searchHeadings(context: Context, query: String, limit: Int = 3): List<HeadingHit> {
+        val hs = headings(context)
+        val groups = queryGroups(query)
+        if (groups.isEmpty()) return emptyList()
+        val n = hs.size.toDouble()
+        fun idfOf(t: String): Double {
+            val df = hs.count { h -> h.words.any { sameWord(it, t) } }
+            return if (df == 0) 0.0 else Math.log(1 + n / df)
+        }
+        // a group's weight is that of the word the user typed; synonyms only stand in when the
+        // typed word itself never appears in a heading
+        val weights = groups.map { g -> idfOf(g.first()).takeIf { it > 0 } ?: g.maxOf { idfOf(it) } }
+        val total = weights.sum()
+        if (total <= 0) return emptyList()
+        val rarest = groups.indices.maxByOrNull { weights[it] }!!
+        return hs.map { h ->
+            var score = 0.0
+            var hasRarest = false
+            groups.forEachIndexed { i, g ->
+                if (g.any { t -> h.words.any { sameWord(it, t) } }) {
+                    score += weights[i]
+                    if (i == rarest) hasRarest = true
+                }
+            }
+            // coverage weighted by how rare (specific) each matched word is;
+            // a heading containing the most specific word of the question gets a bonus
+            var coverage = score / total
+            if (hasRarest) coverage += 0.15
+            HeadingHit(h, score - 0.03 * h.titleWordCount, coverage)
+        }.filter { it.score > 0 }
+            .sortedWith(compareByDescending<HeadingHit> { it.coverage }.thenByDescending { it.score })
+            .take(limit)
+    }
+
+    /** The paragraph that starts at (or contains) a heading. */
+    fun paragraphAtHeading(context: Context, h: Heading): Paragraph? {
+        val onPage = paragraphs(context).filter { it.page == h.page }
+        if (onPage.isEmpty()) return null
+        if (h.y < 0) return onPage.firstOrNull { !it.isContinuation } ?: onPage.first()
+        return onPage.firstOrNull { it.y1 >= h.y + 0.005f } ?: onPage.last()
+    }
+
+    /** Approximate masail printed on a page. */
     fun masailOnPage(context: Context, page: Int): IntRange? {
-        ensureLoaded(context)
-        return maslaIndex?.get(page)
+        val nums = paragraphs(context).filter { it.page == page && it.estimatedMasla > 0 }.map { it.estimatedMasla }
+        return if (nums.isEmpty()) null else nums.min()..nums.max()
     }
 
-    /** Page on which a masla number appears (best effort). */
-    fun pageForMasla(context: Context, masla: Int): Int? {
-        ensureLoaded(context)
-        val idx = maslaIndex ?: return null
-        idx.entries.firstOrNull { masla in it.value }?.let { return it.key }
-        // Nearest page whose range starts before this masla
-        return idx.entries.filter { it.value.first <= masla }.maxByOrNull { it.value.first }?.key
+    /** The paragraph that continues [p] on the next page, if any. */
+    fun continuationOf(context: Context, p: Paragraph): Paragraph? {
+        val all = paragraphs(context)
+        val next = all.getOrNull(p.index + 1) ?: return null
+        val isLastOnPage = next.page != p.page
+        return if (isLastOnPage && next.isContinuation && next.page == p.page + 1) next else null
     }
 
-    // ---------------------------------------------------------------- search
-
-    private val stopWords = setOf(
-        "کے", "کی", "کا", "ہے", "ہیں", "میں", "اور", "کیا", "سے", "کو", "پر", "یا", "نہ", "جو", "وہ", "یہ",
-        "کر", "ہو", "کون", "کب", "کیسے", "کس", "کسی", "کوئی", "تو", "بھی", "اگر", "لئے", "لیے", "ایک", "اس",
-        "ان", "جب", "تک", "والا", "والی", "والے", "ہوتا", "ہوتی", "ہوتے", "کرنا", "کرے", "کریں", "سکتا",
-        "سکتی", "چاہیے", "بتائیں", "بتاو", "مسئلہ", "مسئله", "حکم", "کیاہے", "ہوں", "تھا", "گا", "گی", "نے",
-        "the", "is", "a", "of", "and", "to", "in", "what", "how", "for", "kya", "hai", "ka", "ki", "ke", "me", "mein"
-    )
-
-    private val normStopWords: Set<String> by lazy { stopWords.map { normalize(it) }.toSet() }
+    // ------------------------------------------------------------------ text normalisation
 
     /** Normalise Arabic-script variants that OCR mixes up. */
     fun normalize(s: String): String {
@@ -115,88 +198,154 @@ object BookRepository {
         return sb.toString()
     }
 
-    /** Remove whitespace/punctuation – OCR word spacing is unreliable. */
     private fun compact(s: String): String = s.filter { it.isLetterOrDigit() }
 
-    private fun terms(query: String): List<String> =
-        normalize(query)
+    private val stopWords = setOf(
+        "کے", "کی", "کا", "ہے", "ہیں", "میں", "اور", "کیا", "سے", "کو", "پر", "یا", "نہ", "جو", "وہ", "یہ",
+        "کر", "ہو", "کون", "کب", "کیسے", "کس", "کسی", "کوئی", "تو", "بھی", "اگر", "لئے", "لیے", "ایک", "اس",
+        "ان", "جب", "تک", "والا", "والی", "والے", "ہوتا", "ہوتی", "ہوتے", "کرنا", "کرے", "کریں", "سکتا",
+        "سکتی", "سکتے", "چاہیے", "چاہئے", "بتائیں", "بتاو", "بتائے", "مسئلہ", "حکم", "ہوں", "تھا", "گا", "گی",
+        "نے", "کیوں", "جاتا", "جاتی", "جاتے", "رہا", "رہی", "کچھ", "کتنا", "کتنی", "کتنے", "کیسا", "کیسی", "شرعی",
+        "شرع", "بارے", "کن", "کونسی", "کونسے", "متعلق", "صورت", "لازم", "ضروری", "جائز", "صحیح", "درست"
+    )
+    private val normStopWords: Set<String> by lazy { stopWords.map { normalize(it) }.toSet() }
+
+    /** Everyday words → the words the book uses. */
+    private val synonyms: Map<String, List<String>> by lazy {
+        mapOf(
+            "ٹوٹ" to listOf("باطل"), "ٹوٹتا" to listOf("باطل"), "ٹوٹتی" to listOf("باطل"), "توڑ" to listOf("باطل"),
+            "توڑتی" to listOf("باطل"), "توڑتا" to listOf("باطل"), "خراب" to listOf("باطل"),
+            "ناپاک" to listOf("نجس"), "پلید" to listOf("نجس"), "گندا" to listOf("نجس"),
+            "پیشاب" to listOf("پیشاب"), "قے" to listOf("قے"), "الٹی" to listOf("قے"),
+            "سفر" to listOf("مسافر", "سفر"), "مسافر" to listOf("مسافر", "قصر"),
+            "شادی" to listOf("نکاح", "عقد"), "بیوی" to listOf("زوجہ", "بیوی"), "شوہر" to listOf("شوہر"),
+            "زکات" to listOf("زکوہ"), "زکوٰۃ" to listOf("زکوہ"), "فطرانہ" to listOf("فطرہ"),
+            "ورثہ" to listOf("میراث", "ارث"), "وراثت" to listOf("میراث", "ارث"),
+            "دعا" to listOf("دعا"), "سجدہ" to listOf("سجدہ", "سجدے"), "بھول" to listOf("سہو", "بھول"),
+            "شک" to listOf("شک"), "قضا" to listOf("قضا"), "روزے" to listOf("روزہ", "روزے"),
+            "ناخن" to listOf("ناخن"), "خون" to listOf("خون"), "حیض" to listOf("حیض"),
+            "ماہواری" to listOf("حیض"), "کتا" to listOf("کتا", "کتے"), "سور" to listOf("سور"),
+            "شراب" to listOf("شراب", "مسکر"), "سود" to listOf("سود", "ربا"), "بینک" to listOf("بینک", "سود"),
+            "طریقہ" to listOf("طریقہ", "کیفیت"), "میراث" to listOf("میراث", "وراثت"), "حصہ" to listOf("حصہ", "میراث"),
+            "چاند" to listOf("چاند", "مہینے"), "اجرت" to listOf("اجرت", "اجیر"), "کرایہ" to listOf("کرائے", "اجارہ"),
+            "قرضہ" to listOf("قرض"), "ادھار" to listOf("قرض", "ادھار"), "گروی" to listOf("رہن", "گروی"),
+            "نذر" to listOf("نذر", "منت"), "منت" to listOf("منت", "نذر"), "ذبح" to listOf("ذبح", "ذبیحہ"),
+            "کفن" to listOf("کفن"), "جنازہ" to listOf("میت", "جنازہ"), "مردہ" to listOf("میت", "مردار")
+        ).mapKeys { normalize(it.key) }.mapValues { e -> e.value.map { normalize(it) } }
+    }
+
+    private fun queryTerms(query: String): List<String> {
+        val words = normalize(query)
             .split(Regex("[^\\p{L}\\p{N}]+"))
             .map { it.trim() }
             .filter { it.length >= 2 && it !in normStopWords && it.any { c -> c.isLetter() } }
-            .distinct()
+        val out = LinkedHashSet<String>()
+        for (w in words) {
+            out.add(w)
+            synonyms[w]?.let { out.addAll(it) }
+            // simple Urdu plural/oblique stripping: روزے→روز, نمازوں→نماز
+            if (w.length >= 4) {
+                when {
+                    w.endsWith("وں") -> out.add(w.dropLast(2))
+                    w.endsWith("یں") -> out.add(w.dropLast(2))
+                }
+            }
+        }
+        return out.toList()
+    }
 
-    data class SearchHit(val page: Int, val score: Double)
+    // ------------------------------------------------------------------ search
 
-    /**
-     * Find pages most relevant to the query. [extraTerms] are additional (Urdu) keywords, e.g.
-     * produced by the AI from a Roman-Urdu/English question. [chapterHint] boosts a page range.
-     */
-    fun search(
-        context: Context,
-        query: String,
-        extraTerms: List<String> = emptyList(),
-        chapterHint: IntRange? = null,
-        limit: Int = 3
-    ): List<SearchHit> {
-        ensureLoaded(context)
-        val pages = pageNorm ?: return emptyList()
-        val allTerms = (terms(query) + extraTerms.flatMap { terms(it) }).distinct()
-        if (allTerms.isEmpty()) return emptyList()
+    data class Hit(val paragraph: Paragraph, val score: Double)
 
-        val n = pages.size.toDouble()
-        val scores = HashMap<Int, Double>()
-        for (term in allTerms) {
-            val t = compact(term)
-            if (t.length < 2) continue
-            val df = pages.values.count { it.contains(t) }
+    /** Find the paragraphs (masail) that best match an Urdu question. */
+    fun search(context: Context, query: String, chapterHint: IntRange? = null, limit: Int = 5): List<Hit> {
+        val all = paragraphs(context)
+        val terms = queryTerms(query).map { compact(it) }.filter { it.length >= 2 }
+        if (terms.isEmpty()) return emptyList()
+        val n = all.size.toDouble()
+        val scores = DoubleArray(all.size)
+        val matchedTerms = IntArray(all.size)
+
+        for (t in terms) {
+            var df = 0
+            for (p in all) if (p.norm.contains(t)) df++
             if (df == 0) {
-                // Fuzzy: use trigrams of longer words (OCR may break letters)
+                // OCR may have broken letters: fuzzy trigram match for longer words
                 if (t.length >= 4) {
                     val grams = (0..t.length - 3).map { t.substring(it, it + 3) }.distinct()
-                    for ((pg, text) in pages) {
-                        val hit = grams.count { text.contains(it) }.toDouble() / grams.size
-                        if (hit >= 0.6) scores[pg] = (scores[pg] ?: 0.0) + hit * 0.5
+                    for (p in all) {
+                        val hit = grams.count { p.norm.contains(it) }.toDouble() / grams.size
+                        if (hit >= 0.67) { scores[p.index] += hit * 0.8; matchedTerms[p.index]++ }
                     }
                 }
                 continue
             }
-            if (df > n * 0.6) continue // too common to be useful
+            if (df > n * 0.35) continue // too common to be useful
             val idf = Math.log(1 + n / df)
-            for ((pg, text) in pages) {
+            for (p in all) {
                 var count = 0
                 var from = 0
-                while (count < 5) {
-                    val i = text.indexOf(t, from)
+                while (count < 4) {
+                    val i = p.norm.indexOf(t, from)
                     if (i < 0) break
                     count++; from = i + t.length
                 }
-                if (count > 0) scores[pg] = (scores[pg] ?: 0.0) + idf * (1 + Math.log(count.toDouble()))
+                if (count > 0) {
+                    scores[p.index] += idf * (1 + 0.5 * Math.log(count.toDouble()))
+                    matchedTerms[p.index]++
+                }
             }
         }
-        if (chapterHint != null) {
-            for (pg in chapterHint) scores[pg]?.let { scores[pg] = it * 1.6 }
+        // Phrase bonus: two consecutive query words appearing together
+        val words = queryTerms(query).map { compact(it) }
+        for (i in 0 until words.size - 1) {
+            val phrase = words[i] + words[i + 1]
+            if (phrase.length < 5) continue
+            for (p in all) if (p.norm.contains(phrase)) scores[p.index] += 3.0
         }
-        return scores.entries
-            .sortedByDescending { it.value }
+        for (p in all) {
+            if (scores[p.index] <= 0) continue
+            // reward paragraphs matching many different words of the question
+            scores[p.index] *= 1.0 + 0.35 * (matchedTerms[p.index] - 1).coerceAtLeast(0)
+            if (chapterHint != null && p.page in chapterHint) scores[p.index] *= 1.5
+            // very short fragments (headings) are rarely the answer
+            if (p.norm.length < 25) scores[p.index] *= 0.5
+        }
+        return all.indices
+            .filter { scores[it] > 0 }
+            .sortedByDescending { scores[it] }
             .take(limit)
-            .map { SearchHit(it.key, it.value) }
+            .map { Hit(all[it], scores[it]) }
     }
 
-    /** Short readable snippet around the best-matching term on a page (OCR text). */
-    fun snippet(context: Context, page: Int, query: String, extraTerms: List<String> = emptyList(), maxLen: Int = 260): String {
-        val text = ocrText(context, page)
-        if (text.isEmpty()) return ""
-        val lines = text.lines().filter { it.isNotBlank() }
-        val ts = (terms(query) + extraTerms.flatMap { terms(it) }).map { compact(it) }
-        val best = lines.withIndex().maxByOrNull { (_, line) ->
-            val ln = compact(normalize(line))
-            ts.count { ln.contains(it) }
-        }?.index ?: 0
-        val out = lines.subList(best, minOf(lines.size, best + 3)).joinToString(" ")
-        return if (out.length > maxLen) out.take(maxLen) + "…" else out
+    /** Paragraph for a masla number (best effort, the number in the image is authoritative). */
+    fun findMasla(context: Context, masla: Int): Paragraph? {
+        val all = paragraphs(context)
+        val near = all.filter { it.estimatedMasla > 0 }.minByOrNull { Math.abs(it.estimatedMasla - masla) } ?: return null
+        // The estimate can be a few masail off: look nearby for a paragraph whose printed (OCR)
+        // number matches the requested one, fully or by its last digits.
+        val target = masla.toString()
+        var best: Paragraph = near
+        var bestScore = 0
+        for (off in -12..12) {
+            val p = all.getOrNull(near.index + off) ?: continue
+            val lead = Regex("\\d{1,4}").find(p.norm.take(40))?.value ?: continue
+            val score = when {
+                lead == target -> 100
+                lead.length >= 2 && target.endsWith(lead) -> 10 * lead.length
+                else -> 0
+            } - Math.abs(off)
+            if (score > bestScore) { bestScore = score; best = p }
+        }
+        return best
     }
 
-    // ---------------------------------------------------------------- PDF rendering
+    /** Paragraphs around a given one (for "show more"). */
+    fun neighbour(context: Context, p: Paragraph, offset: Int): Paragraph? =
+        paragraphs(context).getOrNull(p.index + offset)
+
+    // ------------------------------------------------------------------ PDF rendering
 
     private fun pdf(context: Context): File {
         pdfFile?.let { if (it.exists()) return it }
@@ -215,7 +364,7 @@ object BookRepository {
                 PdfRenderer(fd).use { renderer ->
                     val idx = (page - 1).coerceIn(0, renderer.pageCount - 1)
                     renderer.openPage(idx).use { p ->
-                        val w = widthPx.coerceIn(300, 2000)
+                        val w = widthPx.coerceIn(300, 2400)
                         val h = (w.toFloat() * p.height / p.width).toInt()
                         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                         bmp.eraseColor(Color.WHITE)
@@ -227,7 +376,25 @@ object BookRepository {
         }.getOrNull()
     }
 
-    /** JPEG bytes of a page, for sending to the AI or sharing. */
+    /** Render just one paragraph (masla) of a page, cropped from the real printed page. */
+    fun renderParagraph(context: Context, p: Paragraph, widthPx: Int): Bitmap? {
+        // Render the page wide enough that the cropped text area is about widthPx wide
+        val textWidthFraction = (p.x1 - p.x0).coerceAtLeast(0.6f)
+        val pageWidth = (widthPx / (textWidthFraction + 0.04f)).toInt()
+        val page = renderPage(context, p.page, pageWidth) ?: return null
+        val padX = 0.015f
+        val padY = 0.008f
+        val left = ((minOf(p.x0, 0.12f) - padX).coerceAtLeast(0f) * page.width).toInt()
+        val right = ((maxOf(p.x1, 0.88f) + padX).coerceAtMost(1f) * page.width).toInt()
+        val top = ((p.y0 - padY).coerceAtLeast(0f) * page.height).toInt()
+        val bottom = ((p.y1 + padY * 1.6f).coerceAtMost(1f) * page.height).toInt()
+        if (right - left < 10 || bottom - top < 10) return page
+        val crop = Bitmap.createBitmap(page, left, top, right - left, bottom - top)
+        if (crop != page) page.recycle()
+        return crop
+    }
+
+    /** JPEG bytes of a page, for sharing. */
     fun pageJpeg(context: Context, page: Int, widthPx: Int = 1100, quality: Int = 82): ByteArray? {
         val bmp = renderPage(context, page, widthPx) ?: return null
         return ByteArrayOutputStream().use { out ->
