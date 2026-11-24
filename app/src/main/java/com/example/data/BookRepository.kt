@@ -100,12 +100,17 @@ object BookRepository {
         else -> w
     }
 
+    // Endings Urdu adds to a word (plural, oblique, feminine, verb forms)
+    private val endings = listOf("ی", "ے", "ا", "ہ", "وں", "یں", "یاں", "ات", "نا", "نی", "نے", "تا", "تی", "تے")
+
     private fun sameWord(a: String, b: String): Boolean {
         val x = stem(a); val y = stem(b)
         if (x == y) return true
         val short = if (x.length <= y.length) x else y
         val long = if (x.length <= y.length) y else x
-        return short.length >= 3 && long.startsWith(short) && long.length - short.length <= 3
+        if (short.length < 3 || !long.startsWith(short)) return false
+        // only a known grammatical ending may follow (so دوران ≠ دور, مسجد ≠ مس)
+        return long.substring(short.length) in endings
     }
 
     /** Each question word with its alternatives (synonyms / plural forms). */
@@ -147,9 +152,9 @@ object BookRepository {
             }
             // coverage weighted by how rare (specific) each matched word is;
             // a heading containing the most specific word of the question gets a bonus
-            var coverage = score / total
-            if (hasRarest) coverage += 0.15
-            HeadingHit(h, score - 0.03 * h.titleWordCount, coverage)
+            val coverage = score / total
+            // the most specific word of the question breaks ties
+            HeadingHit(h, score - 0.03 * h.titleWordCount + (if (hasRarest) 0.5 else 0.0), coverage)
         }.filter { it.score > 0 }
             .sortedWith(compareByDescending<HeadingHit> { it.coverage }.thenByDescending { it.score })
             .take(limit)

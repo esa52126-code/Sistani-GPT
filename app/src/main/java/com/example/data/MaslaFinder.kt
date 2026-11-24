@@ -43,7 +43,7 @@ object MaslaFinder {
         val hint = chapter?.let { it.pageStart..it.pageEnd }
         val hits = BookRepository.search(context, q, hint, limit = 4)
         val headingHits = BookRepository.searchHeadings(context, q)
-        val topHeading = headingHits.firstOrNull()?.takeIf { it.coverage >= 0.6 || (it.coverage >= 0.5 && it.score > 4) }
+        val topHeading = headingHits.firstOrNull()?.takeIf { it.coverage >= 0.6 }
         if (topHeading != null) {
             val start = BookRepository.paragraphAtHeading(context, topHeading.heading)
             if (start != null) {
