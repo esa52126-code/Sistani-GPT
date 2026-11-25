@@ -7,7 +7,7 @@ name: Build AAB (Google Play)
 #   UPLOAD_KEYSTORE_BASE64  – your upload .jks file, base64-encoded
 #   UPLOAD_STORE_PASSWORD   – the keystore password
 #   UPLOAD_KEY_PASSWORD     – the key password (often the same as the store password)
-# The key alias must be "upload" (as set in app/build.gradle.kts).
+# The key alias is read from the keystore automatically.
 # Without these secrets the bundle is signed with a throwaway key and Play will reject it.
 
 on:
@@ -42,16 +42,26 @@ jobs:
           KEY_PW: ${{ secrets.UPLOAD_KEY_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PW" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > upload.jks
-            echo "store=$STORE_PW" >> "$GITHUB_OUTPUT"
-            echo "key=${KEY_PW:-$STORE_PW}" >> "$GITHUB_OUTPUT"
+            echo "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > upload.jks
+            # read the key alias from the keystore itself
+            ALIAS=$(keytool -list -keystore upload.jks -storepass "$STORE_PW" 2>/dev/null | grep -i 'PrivateKeyEntry' | head -1 | cut -d, -f1)
+            if [ -z "$ALIAS" ]; then echo "::error::Could not open the keystore - check UPLOAD_KEYSTORE_BASE64 and UPLOAD_STORE_PASSWORD"; exit 1; fi
+            echo "Key alias: $ALIAS"
+            {
+              echo "KEY_ALIAS=$ALIAS"
+              echo "STORE_PASSWORD=$STORE_PW"
+              echo "KEY_PASSWORD=${KEY_PW:-$STORE_PW}"
+            } >> "$GITHUB_ENV"
             echo "signed=true" >> "$GITHUB_OUTPUT"
             echo "Using the real upload key from repository secrets"
           else
             keytool -genkeypair -keystore upload.jks -storepass throwaway123 -alias upload \
               -keypass throwaway123 -keyalg RSA -keysize 2048 -validity 1000 -dname "CN=CI"
-            echo "store=throwaway123" >> "$GITHUB_OUTPUT"
-            echo "key=throwaway123" >> "$GITHUB_OUTPUT"
+            {
+              echo "KEY_ALIAS=upload"
+              echo "STORE_PASSWORD=throwaway123"
+              echo "KEY_PASSWORD=throwaway123"
+            } >> "$GITHUB_ENV"
             echo "signed=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Upload key secrets are not set - this AAB is NOT signed with your upload key and Play will reject it"
           fi
@@ -59,8 +69,6 @@ jobs:
       - name: Build release bundle
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/upload.jks
-          STORE_PASSWORD: ${{ steps.key.outputs.store }}
-          KEY_PASSWORD: ${{ steps.key.outputs.key }}
         run: gradle :app:bundleRelease --no-daemon
 
       - name: Name the bundle
