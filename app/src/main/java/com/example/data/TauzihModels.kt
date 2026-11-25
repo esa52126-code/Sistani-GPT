@@ -39,7 +39,8 @@ data class ChatMessage(
     val timestamp: Long = System.currentTimeMillis(),
     val language: AppLanguage,
     val referencedPages: List<Int> = emptyList(),
-    val referencedMasail: List<Int> = emptyList()
+    val referencedMasail: List<Int> = emptyList(),
+    val paragraphs: List<Int> = emptyList()
 )
 
 data class BookmarkItem(

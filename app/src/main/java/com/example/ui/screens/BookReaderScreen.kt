@@ -30,6 +30,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.AppLanguage
 import com.example.data.TauzihDatabase
+import com.example.data.BookRepository
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,7 +52,7 @@ fun BookReaderScreen(
     modifier: Modifier = Modifier
 ) {
     var currentPage by remember(initialPage) { mutableIntStateOf(initialPage.coerceIn(1, 542)) }
-    var fontSizeSp by remember { mutableFloatStateOf(17f) }
+    var zoom by remember { mutableFloatStateOf(1f) }
     var showJumpDialog by remember { mutableStateOf(false) }
     var jumpInputText by remember { mutableStateOf("") }
     val context = LocalContext.current
@@ -53,6 +63,30 @@ fun BookReaderScreen(
     }
 
     val bookmarked = isBookmarked(currentPage)
+    val masailRangeText by produceState(initialValue = "", currentPage) {
+        value = withContext(Dispatchers.IO) {
+            BookRepository.masailOnPage(context, currentPage)?.let { "مسائل تقریباً ${it.first} تا ${it.last}" } ?: ""
+        }
+    }
+
+    fun sharePageImage() {
+        try {
+            val bytes = BookRepository.pageJpeg(context, currentPage, 1400, 90) ?: return
+            val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+            val file = File(dir, "tauzih_page_$currentPage.jpg")
+            file.writeBytes(bytes)
+            val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "image/jpeg"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, "توضیح المسائل (آیت اللہ سیستانی) — صفحہ $currentPage")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "صفحہ $currentPage شیئر / محفوظ کریں"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "شیئر نہیں ہو سکا: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     if (showJumpDialog) {
         AlertDialog(
@@ -141,15 +175,7 @@ fun BookReaderScreen(
                         )
                     }
                     // Share / Download page text
-                    IconButton(onClick = {
-                        val shareText = "توضیح المسائل - حضرت آیت اللہ العظمیٰ سید علی حسینی سیستانی\nصفحہ: $currentPage\nباب: ${pageData.chapterTitleUrdu}\nمسائل: ${pageData.masailRange}\n\n${pageData.contentUrdu}"
-                        val sendIntent = Intent().apply {
-                            action = Intent.ACTION_SEND
-                            putExtra(Intent.EXTRA_TEXT, shareText)
-                            type = "text/plain"
-                        }
-                        context.startActivity(Intent.createChooser(sendIntent, "صفحہ $currentPage شیئر / ڈاؤنلوڈ کریں"))
-                    }) {
+                    IconButton(onClick = { sharePageImage() }) {
                         Icon(Icons.Default.Share, contentDescription = "Share or download page")
                     }
                 }
@@ -210,15 +236,15 @@ fun BookReaderScreen(
 
                         // Text size controls
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { if (fontSizeSp > 13f) fontSizeSp -= 2f }) {
-                                Icon(Icons.Default.TextDecrease, contentDescription = "Smaller Text")
+                            IconButton(onClick = { if (zoom > 1f) zoom -= 0.25f }) {
+                                Icon(Icons.Default.ZoomOut, contentDescription = "Zoom out")
                             }
                             Text(
-                                text = "${fontSizeSp.toInt()}sp",
+                                text = "${(zoom * 100).toInt()}%",
                                 style = MaterialTheme.typography.labelMedium
                             )
-                            IconButton(onClick = { if (fontSizeSp < 28f) fontSizeSp += 2f }) {
-                                Icon(Icons.Default.TextIncrease, contentDescription = "Larger Text")
+                            IconButton(onClick = { if (zoom < 3f) zoom += 0.25f }) {
+                                Icon(Icons.Default.ZoomIn, contentDescription = "Zoom in")
                             }
                         }
 
@@ -294,7 +320,7 @@ fun BookReaderScreen(
                     )
 
                     Text(
-                        text = pageData.masailRange,
+                        text = masailRangeText,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.secondary,
                         fontWeight = FontWeight.SemiBold
@@ -311,72 +337,48 @@ fun BookReaderScreen(
                     .fillMaxWidth()
                     .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
             ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ",
-                            fontFamily = FontFamily.Serif,
-                            color = MaterialTheme.colorScheme.secondary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(
-                            onClick = {
-                                clipboardManager.setText(AnnotatedString(pageData.contentUrdu))
-                                Toast.makeText(context, "صفحہ کا متن کاپی کر لیا گیا", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy text", modifier = Modifier.size(18.dp))
+                Column(modifier = Modifier.padding(8.dp)) {
+                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                        val density = LocalDensity.current
+                        val boxWidth = maxWidth
+                        val baseWidthPx = with(density) { maxWidth.toPx() }.toInt()
+                        val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, currentPage, zoom, baseWidthPx) {
+                            value = withContext(Dispatchers.IO) {
+                                BookRepository.renderPage(context, currentPage, (baseWidthPx * zoom * 1.5f).toInt())
+                            }
+                        }
+                        val bmp = bitmap
+                        if (bmp == null) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().height(400.dp),
+                                contentAlignment = Alignment.Center
+                            ) { CircularProgressIndicator() }
+                        } else {
+                            Box(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                Image(
+                                    bitmap = bmp.asImageBitmap(),
+                                    contentDescription = "صفحہ $currentPage",
+                                    contentScale = ContentScale.FillWidth,
+                                    modifier = Modifier.width(boxWidth * zoom)
+                                )
+                            }
                         }
                     }
 
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-                    // Clean text rendering
-                    Text(
-                        text = pageData.contentUrdu,
-                        fontSize = fontSizeSp.sp,
-                        lineHeight = (fontSizeSp * 1.75).sp,
-                        fontFamily = FontFamily.Serif,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        textAlign = TextAlign.Right,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    HorizontalDivider()
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Download / Export Notice
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "مرجع عالی قدر آیت اللہ سید علی سیستانی",
+                            text = "اصل کتاب کا صفحہ $currentPage",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-
                         FilledTonalButton(
-                            onClick = {
-                                val shareText = "توضیح المسائل - صفحہ $currentPage\n${pageData.chapterTitleUrdu}\n\n${pageData.contentUrdu}"
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, shareText)
-                                }
-                                context.startActivity(Intent.createChooser(intent, "ڈاؤنلوڈ / محفوظ کریں"))
-                            },
+                            onClick = { sharePageImage() },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))

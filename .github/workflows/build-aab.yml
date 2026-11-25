@@ -1,0 +1,93 @@
+name: Build AAB (Google Play)
+
+# Builds the release app bundle for Google Play.
+#
+# To sign it with your real upload key, add these repository secrets
+# (Settings → Secrets and variables → Actions → New repository secret):
+#   UPLOAD_KEYSTORE_BASE64  – your upload .jks file, base64-encoded
+#   UPLOAD_STORE_PASSWORD   – the keystore password
+#   UPLOAD_KEY_PASSWORD     – the key password (often the same as the store password)
+# The key alias is read from the keystore automatically.
+# Without these secrets the bundle is signed with a throwaway key and Play will reject it.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, ccr-33354023-g9mh7h]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Prepare signing key
+        id: key
+        env:
+          KEYSTORE_B64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+          STORE_PW: ${{ secrets.UPLOAD_STORE_PASSWORD }}
+          KEY_PW: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PW" ]; then
+            echo "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > upload.jks
+            # read the key alias from the keystore itself
+            ALIAS=$(keytool -list -keystore upload.jks -storepass "$STORE_PW" 2>/dev/null | grep -i 'PrivateKeyEntry' | head -1 | cut -d, -f1)
+            if [ -z "$ALIAS" ]; then echo "::error::Could not open the keystore - check UPLOAD_KEYSTORE_BASE64 and UPLOAD_STORE_PASSWORD"; exit 1; fi
+            echo "Key alias: $ALIAS"
+            {
+              echo "KEY_ALIAS=$ALIAS"
+              echo "STORE_PASSWORD=$STORE_PW"
+              echo "KEY_PASSWORD=${KEY_PW:-$STORE_PW}"
+            } >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Using the real upload key from repository secrets"
+          else
+            keytool -genkeypair -keystore upload.jks -storepass throwaway123 -alias upload \
+              -keypass throwaway123 -keyalg RSA -keysize 2048 -validity 1000 -dname "CN=CI"
+            {
+              echo "KEY_ALIAS=upload"
+              echo "STORE_PASSWORD=throwaway123"
+              echo "KEY_PASSWORD=throwaway123"
+            } >> "$GITHUB_ENV"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Upload key secrets are not set - this AAB is NOT signed with your upload key and Play will reject it"
+          fi
+
+      - name: Build release bundle
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/upload.jks
+        run: gradle :app:bundleRelease --no-daemon
+
+      - name: Name the bundle
+        run: |
+          if [ "${{ steps.key.outputs.signed }}" = "true" ]; then
+            cp app/build/outputs/bundle/release/app-release.aab Tauzih-AI-play.aab
+          else
+            cp app/build/outputs/bundle/release/app-release.aab Tauzih-AI-NOT-upload-signed.aab
+          fi
+          rm -f upload.jks
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: aab-${{ github.run_number }}
+          name: Tauzih AI AAB for Google Play (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          make_latest: false
+          body: |
+            App bundle for Google Play (${{ steps.key.outputs.signed == 'true' && 'signed with your upload key' || 'NOT signed with your upload key - add the UPLOAD_* secrets and run again' }}).
+            Built from branch ${{ github.ref_name }}.
+          files: Tauzih-AI-*.aab
